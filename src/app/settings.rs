@@ -141,7 +141,7 @@ impl Settings {
                             .child(Self::settings_section_header(
                                 palette,
                                 "Appearance",
-                                "Choose how Cadence looks on this Mac.",
+                                "Choose how Riddim looks on this computer.",
                             ))
                             .child(
                                 div()
@@ -153,21 +153,21 @@ impl Settings {
                                     .gap_1()
                                     .child(self.appearance_option(
                                         "settings-appearance-system",
-                                        CadenceIcon::SystemAppearance,
+                                        RiddimIcon::SystemAppearance,
                                         "System",
                                         ThemePreference::System,
                                         cx,
                                     ))
                                     .child(self.appearance_option(
                                         "settings-appearance-light",
-                                        CadenceIcon::Sun,
+                                        RiddimIcon::Sun,
                                         "Light",
                                         ThemePreference::Light,
                                         cx,
                                     ))
                                     .child(self.appearance_option(
                                         "settings-appearance-dark",
-                                        CadenceIcon::Moon,
+                                        RiddimIcon::Moon,
                                         "Dark",
                                         ThemePreference::Dark,
                                         cx,
@@ -235,7 +235,7 @@ impl Settings {
                             .child(Self::settings_section_header(
                                 palette,
                                 "Spotify",
-                                "Manage the developer app Cadence uses to connect to Spotify.",
+                                "Manage the developer app Riddim uses to connect to Spotify.",
                             ))
                             .child(
                                 div()
@@ -280,7 +280,7 @@ impl Settings {
                                                             .justify_start()
                                                             .child(client_id)
                                                             .child(components::icon(
-                                                                CadenceIcon::ArrowUpRight,
+                                                                RiddimIcon::ArrowUpRight,
                                                                 tokens::INLINE_ICON,
                                                                 palette.link,
                                                             ))
@@ -324,7 +324,7 @@ impl Settings {
                                                 .line_height(relative(1.45))
                                                 .text_color(rgb(palette.text))
                                                 .child(
-                                                    "Quit Cadence and update the environment variable to change the developer app.",
+                                                    "Quit Riddim and update the environment variable to change the developer app.",
                                                 ),
                                         )
                                     }),
@@ -336,7 +336,7 @@ impl Settings {
 
     fn updates_section(
         &self,
-        palette: CadencePalette,
+        palette: RiddimPalette,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -390,14 +390,14 @@ impl Settings {
     /// The running version with the outcome of Sparkle's last check, and a
     /// button that opens Sparkle's window. `None` means this build never
     /// checks, so there is nothing to press.
-    fn version_row(palette: CadencePalette, check: Option<&updater::UpdateCheck>) -> Div {
+    fn version_row(palette: RiddimPalette, check: Option<&updater::UpdateCheck>) -> Div {
         use updater::UpdateCheck;
         let (detail, emphasized) = match check {
             None => ("This build does not update itself.".to_owned(), false),
             Some(UpdateCheck::Unknown) => ("Not checked yet.".to_owned(), false),
             Some(UpdateCheck::UpToDate) => ("Up to date.".to_owned(), false),
             Some(UpdateCheck::Available(version)) => {
-                (format!("Cadence {version} is ready to install."), true)
+                (format!("Riddim {version} is ready to install."), true)
             }
             Some(UpdateCheck::Skipped(version)) => (format!("Version {version} skipped."), false),
         };
@@ -445,7 +445,7 @@ impl Settings {
     }
 
     fn settings_section_header(
-        palette: CadencePalette,
+        palette: RiddimPalette,
         title: &'static str,
         detail: &'static str,
     ) -> Div {
@@ -467,7 +467,7 @@ impl Settings {
     }
 
     fn playback_setting_row(
-        palette: CadencePalette,
+        palette: RiddimPalette,
         title: &'static str,
         description: &'static str,
         field: impl IntoElement,
@@ -503,7 +503,7 @@ impl Settings {
     fn appearance_option(
         &self,
         id: &'static str,
-        icon: CadenceIcon,
+        icon: RiddimIcon,
         label: &'static str,
         preference: ThemePreference,
         cx: &mut Context<Self>,

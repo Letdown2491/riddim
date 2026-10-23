@@ -10,11 +10,12 @@
 // objc 0.2's macros expand a stale `cfg(feature = "cargo-clippy")` check.
 #![allow(unexpected_cfgs)]
 
-use super::*;
+use crate::app::*;
 
 use std::ffi::{CStr, CString, c_char};
 use std::sync::OnceLock;
 
+use super::{UpdateCheck, UpdateStatus};
 use objc::declare::ClassDecl;
 use objc::runtime::{BOOL, Class, NO, Object, Protocol, Sel, YES};
 use objc::{class, msg_send, sel, sel_impl};
@@ -22,25 +23,9 @@ use objc::{class, msg_send, sel, sel_impl};
 /// The choice in Sparkle's window that hides this version for good.
 const USER_UPDATE_CHOICE_SKIP: isize = 0;
 
-/// What Sparkle last reported, watched by the settings page.
-#[derive(Default)]
-pub(super) struct UpdateStatus {
-    pub(super) check: UpdateCheck,
-}
-
-/// The outcome of Sparkle's most recent check, by display version.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) enum UpdateCheck {
-    #[default]
-    Unknown,
-    UpToDate,
-    Available(String),
-    Skipped(String),
-}
-
 /// Sparkle's standard updater controller and its delegate, kept alive for
 /// the whole process.
-pub(super) struct Updater {
+pub(crate) struct Updater {
     controller: *mut Object,
     _delegate: *mut Object,
     status: Entity<UpdateStatus>,
@@ -59,7 +44,7 @@ static EVENTS: OnceLock<async_channel::Sender<UpdateEvent>> = OnceLock::new();
 
 /// Starts Sparkle when this bundle is meant to update itself and records
 /// the controller so the menu and settings can reach it.
-pub(super) fn start(cx: &mut App) -> bool {
+pub(crate) fn start(cx: &mut App) -> bool {
     if !should_start(cfg!(debug_assertions), feed_url().is_some()) {
         log::info!("startup: updater inert for this build");
         return false;
@@ -121,7 +106,7 @@ pub(super) fn start(cx: &mut App) -> bool {
 }
 
 /// Runs a user-initiated update check with Sparkle's own progress windows.
-pub(super) fn check_for_updates(cx: &mut App) {
+pub(crate) fn check_for_updates(cx: &mut App) {
     let Some(updater) = cx.try_global::<Updater>() else {
         return;
     };
@@ -130,21 +115,21 @@ pub(super) fn check_for_updates(cx: &mut App) {
 }
 
 /// What Sparkle found, or `None` when this build does not update itself.
-pub(super) fn status(cx: &App) -> Option<Entity<UpdateStatus>> {
+pub(crate) fn status(cx: &App) -> Option<Entity<UpdateStatus>> {
     cx.try_global::<Updater>()
         .map(|updater| updater.status.clone())
 }
 
 /// Whether Sparkle looks for updates on its own, or `None` when this build
 /// does not update itself. Sparkle persists the choice.
-pub(super) fn automatic_checks(cx: &App) -> Option<bool> {
+pub(crate) fn automatic_checks(cx: &App) -> Option<bool> {
     let updater = cx.try_global::<Updater>()?;
     let enabled: BOOL =
         unsafe { msg_send![sparkle_updater(updater), automaticallyChecksForUpdates] };
     Some(enabled == YES)
 }
 
-pub(super) fn set_automatic_checks(enabled: bool, cx: &mut App) {
+pub(crate) fn set_automatic_checks(enabled: bool, cx: &mut App) {
     let Some(updater) = cx.try_global::<Updater>() else {
         return;
     };
@@ -190,10 +175,10 @@ fn load_framework() -> bool {
 
 /// The `SPUUpdaterDelegate` that reports Sparkle's findings back to the app.
 fn delegate_class() -> &'static Class {
-    if let Some(class) = Class::get("CadenceUpdaterDelegate") {
+    if let Some(class) = Class::get("RiddimUpdaterDelegate") {
         return class;
     }
-    let mut declaration = ClassDecl::new("CadenceUpdaterDelegate", class!(NSObject))
+    let mut declaration = ClassDecl::new("RiddimUpdaterDelegate", class!(NSObject))
         .expect("the delegate class name is unused");
     if let Some(protocol) = Protocol::get("SPUUpdaterDelegate") {
         declaration.add_protocol(protocol);

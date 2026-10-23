@@ -17,7 +17,7 @@ const ACTIONS_MENU_WINDOW_MARGIN: Rems = Rems(0.5);
 
 /// The column header for a track list. Lives beside `TrackRow` so the fixed
 /// columns cannot drift out of step with the rows they label.
-pub(super) fn track_list_header(palette: CadencePalette, compact: bool) -> Div {
+pub(super) fn track_list_header(palette: RiddimPalette, compact: bool) -> Div {
     div()
         .h_10()
         .flex_none()
@@ -41,7 +41,7 @@ pub(super) fn track_list_header(palette: CadencePalette, compact: bool) -> Div {
                 .items_center()
                 .justify_center()
                 .child(components::icon(
-                    CadenceIcon::Star,
+                    RiddimIcon::Star,
                     tokens::COLUMN_HEADER_ICON,
                     palette.text_muted,
                 )),
@@ -79,7 +79,7 @@ type RowCallback = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 pub(super) struct TrackRow {
     index: usize,
     track: model::Track,
-    palette: CadencePalette,
+    palette: RiddimPalette,
     image_cache: Entity<image_cache::BoundedImageCache>,
     compact: bool,
     current: bool,
@@ -96,7 +96,7 @@ impl TrackRow {
     pub(super) fn new(
         index: usize,
         track: model::Track,
-        palette: CadencePalette,
+        palette: RiddimPalette,
         image_cache: Entity<image_cache::BoundedImageCache>,
     ) -> Self {
         Self {
@@ -207,7 +207,7 @@ impl RenderOnce for TrackRow {
                         &self.image_cache,
                         self.track.artwork_url.as_deref(),
                         tokens::TRACK_ARTWORK,
-                        CadenceIcon::MusicNote,
+                        RiddimIcon::MusicNote,
                     ))
                     .child(
                         // Cross-axis stretch (the default) hands each line a
@@ -252,9 +252,9 @@ impl RenderOnce for TrackRow {
                     .hover(|style| style.bg(rgb(palette.control)))
                     .child(components::icon(
                         if self.favorite {
-                            CadenceIcon::StarFilled
+                            RiddimIcon::StarFilled
                         } else {
-                            CadenceIcon::Star
+                            RiddimIcon::Star
                         },
                         tokens::MENU_ICON,
                         if self.favorite {
@@ -301,7 +301,7 @@ impl RenderOnce for TrackRow {
                                     .group_hover(row_group, |style| style.visible())
                             })
                             .child(components::icon(
-                                CadenceIcon::More,
+                                RiddimIcon::More,
                                 tokens::CONTROL_ICON,
                                 palette.text_primary,
                             ))
@@ -338,7 +338,7 @@ impl RenderOnce for TrackRow {
 pub(super) struct PlaylistRow {
     index: usize,
     playlist: model::Playlist,
-    palette: CadencePalette,
+    palette: RiddimPalette,
     image_cache: Entity<image_cache::BoundedImageCache>,
     on_open: Option<RowCallback>,
 }
@@ -347,7 +347,7 @@ impl PlaylistRow {
     pub(super) fn new(
         index: usize,
         playlist: model::Playlist,
-        palette: CadencePalette,
+        palette: RiddimPalette,
         image_cache: Entity<image_cache::BoundedImageCache>,
     ) -> Self {
         Self {
@@ -390,7 +390,7 @@ impl RenderOnce for PlaylistRow {
                 &self.image_cache,
                 self.playlist.artwork_url.as_deref(),
                 tokens::PLAYLIST_ROW_ARTWORK,
-                CadenceIcon::Playlist,
+                RiddimIcon::Playlist,
             ))
             .child(
                 div()

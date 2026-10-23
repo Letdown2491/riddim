@@ -47,6 +47,7 @@ pub(super) fn sync_windows(cx: &mut App) {
         // Main stays however the listener left it; only sign-in is required.
         DesiredWindows::MainWithOnboarding => {
             ensure_onboarding_window(cx);
+            #[cfg(target_os = "macos")]
             lock_onboarding_over_main(cx);
         }
         DesiredWindows::OnboardingOnly => {
@@ -67,7 +68,7 @@ pub(super) fn open_initial_window(credentials_expected: bool, cx: &mut App) {
     }
 }
 
-/// Brings Cadence forward: activates an open window (sign-in first, since it
+/// Brings Riddim forward: activates an open window (sign-in first, since it
 /// is the one asking something of the listener), or opens whichever window
 /// the current state calls for.
 pub(super) fn show_app_window(cx: &mut App) {
@@ -103,7 +104,7 @@ pub(super) fn open_main_window(cx: &mut App) {
             window_min_size: Some(size(px(720.), px(600.))),
             is_resizable: true,
             titlebar: Some(gpui_kit::TitlebarOptions {
-                title: Some("Cadence".into()),
+                title: Some("Riddim".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(traffic_light_position(Theme::global(cx).font_size)),
             }),
@@ -111,14 +112,14 @@ pub(super) fn open_main_window(cx: &mut App) {
         },
         cx,
         |window, cx| {
-            let cadence = cx.new(|cx| Workspace::new(window, cx));
-            services::AppServices::set_root(cadence.downgrade(), cx);
-            cadence
+            let riddim = cx.new(|cx| Workspace::new(window, cx));
+            services::AppServices::set_root(riddim.downgrade(), cx);
+            riddim
         },
     );
     match opened {
         Ok((handle, _)) => services::AppServices::set_main_window(Some(handle), cx),
-        Err(error) => log::error!("could not open the Cadence window: {error}"),
+        Err(error) => log::error!("could not open the Riddim window: {error}"),
     }
 }
 
@@ -136,7 +137,7 @@ pub(super) fn ensure_onboarding_window(cx: &mut App) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             is_resizable: false,
             titlebar: Some(gpui_kit::TitlebarOptions {
-                title: Some("Cadence".into()),
+                title: Some("Riddim".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(traffic_light_position(Theme::global(cx).font_size)),
             }),
@@ -170,6 +171,9 @@ fn close_window(handle: Option<gpui_kit::AnyWindowHandle>, cx: &mut App) {
 
 /// Pins the sign-in window over main as one unit: the pair moves together,
 /// the sign-in window cannot fall behind main, and neither closes separately.
+/// GPUI has no parent-child window relationship on any platform, so outside
+/// macOS (where AppKit pins the pair) the onboarding window just floats.
+#[cfg(target_os = "macos")]
 fn lock_onboarding_over_main(cx: &mut App) {
     #[cfg(target_os = "macos")]
     {

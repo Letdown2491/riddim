@@ -1,4 +1,4 @@
-//! Cadence's named sizes for the relationships the GPUI rem scale does not
+//! Riddim's named sizes for the relationships the GPUI rem scale does not
 //! cover. Each value is in rems, so it zooms with the theme's base font.
 
 use gpui_kit::Rems;

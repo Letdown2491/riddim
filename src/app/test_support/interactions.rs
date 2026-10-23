@@ -1,4 +1,6 @@
-use super::{BackendProbe, initialize, press_key, settle, tab_to, track, workspace};
+use super::{
+    BackendProbe, initialize, press_key, primary_modifier, settle, tab_to, track, workspace,
+};
 use crate::app::{
     COLLAPSED_SIDEBAR_WIDTH, EXPANDED_SIDEBAR_WIDTH, Route, Workspace, appearance, assets,
     components, onboarding, services, windows,
@@ -40,7 +42,7 @@ impl Fixture {
     fn new(settings: bool) -> Self {
         let mut cx = HeadlessAppContext::with_asset_source(
             Arc::new(NoopTextSystem),
-            Arc::new(assets::CadenceAssets),
+            Arc::new(assets::RiddimAssets),
         );
         let backend = cx.update(|cx| initialize(cx, ThemePreference::Dark));
         let (window, workspace) = workspace(&mut cx, 1280., 820.);
@@ -89,7 +91,7 @@ impl Fixture {
     ) -> Self {
         let mut cx = HeadlessAppContext::with_asset_source(
             Arc::new(NoopTextSystem),
-            Arc::new(assets::CadenceAssets),
+            Arc::new(assets::RiddimAssets),
         );
         let backend = cx.update(|cx| {
             let backend = initialize(cx, theme);
@@ -271,7 +273,7 @@ impl Fixture {
 fn search_shortcut_focuses_input_and_enter_submits_text_without_toggling_playback() {
     let mut fixture = Fixture::new(false);
     fixture.no_commands();
-    fixture.update(|window, cx| window.press("cmd-k", cx));
+    fixture.update(|window, cx| window.press(&format!("{}-k", primary_modifier()), cx));
     fixture.update(|window, cx| {
         assert_eq!(window.find("search-input").focused(), Some(true));
         window.input("Blue", cx);
@@ -315,7 +317,7 @@ fn client_id_validation_keeps_focus_and_only_submits_valid_input() {
     fixture.no_commands();
     fixture.update(|window, cx| {
         window.click("client-id-input", cx);
-        window.press("cmd-a", cx);
+        window.press(&format!("{}-a", primary_modifier()), cx);
         window.input("0123456789abcdef0123456789abcdef", cx);
     });
     fixture.update(|window, cx| {
@@ -649,7 +651,7 @@ fn player_bar_opens_each_credited_artist_and_the_album_separately() {
 fn player_bar_title_opens_the_album_from_the_keyboard() {
     let mut fixture = Fixture::new(false);
     fixture.play(credited_track());
-    fixture.press("cmd-k");
+    fixture.press(&format!("{}-k", primary_modifier()));
     assert_eq!(fixture.route(), Route::Search);
 
     fixture.tab_to("player-title");
@@ -1074,7 +1076,7 @@ fn space_activates_a_focused_transport_control_instead_of_toggling_playback() {
 #[test]
 fn a_pointer_press_leaves_keyboard_focus_with_the_workspace() {
     let mut fixture = Fixture::new(false);
-    fixture.press("cmd-k");
+    fixture.press(&format!("{}-k", primary_modifier()));
     assert!(fixture.focused("search-input"));
 
     fixture.update(|window, cx| window.click("nav-favorites", cx));

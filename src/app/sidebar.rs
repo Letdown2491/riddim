@@ -16,8 +16,8 @@ struct NavItem {
     id: &'static str,
     fill_id: &'static str,
     label: &'static str,
-    icon: CadenceIcon,
-    selected_icon: CadenceIcon,
+    icon: RiddimIcon,
+    selected_icon: RiddimIcon,
     route: Route,
 }
 
@@ -26,32 +26,32 @@ const NAV_ITEMS: [NavItem; 4] = [
         id: "nav-library",
         fill_id: "nav-library-fill",
         label: "Liked Songs",
-        icon: CadenceIcon::Heart,
-        selected_icon: CadenceIcon::HeartFilled,
+        icon: RiddimIcon::Heart,
+        selected_icon: RiddimIcon::HeartFilled,
         route: Route::LikedSongs,
     },
     NavItem {
         id: "nav-favorites",
         fill_id: "nav-favorites-fill",
         label: "Favorites",
-        icon: CadenceIcon::Star,
-        selected_icon: CadenceIcon::StarFilled,
+        icon: RiddimIcon::Star,
+        selected_icon: RiddimIcon::StarFilled,
         route: Route::Favorites,
     },
     NavItem {
         id: "nav-playlist",
         fill_id: "nav-playlist-fill",
         label: "Playlists",
-        icon: CadenceIcon::Playlist,
-        selected_icon: CadenceIcon::PlaylistFilled,
+        icon: RiddimIcon::Playlist,
+        selected_icon: RiddimIcon::PlaylistFilled,
         route: Route::Playlists,
     },
     NavItem {
         id: "nav-recent",
         fill_id: "nav-recent-fill",
         label: "Recently played",
-        icon: CadenceIcon::Clock,
-        selected_icon: CadenceIcon::ClockFilled,
+        icon: RiddimIcon::Clock,
+        selected_icon: RiddimIcon::ClockFilled,
         route: Route::Recent,
     },
 ];
@@ -173,7 +173,7 @@ impl Sidebar {
         item: &NavItem,
         focus_handle: &FocusHandle,
         transition: &RowTransition,
-        palette: CadencePalette,
+        palette: RiddimPalette,
         window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
@@ -333,7 +333,7 @@ impl Sidebar {
                     .size(BRAND_LOGO_SIZE)
                     .flex_none(),
             )
-            .child(div().whitespace_nowrap().child("Cadence").with_animation(
+            .child(div().whitespace_nowrap().child("Riddim").with_animation(
                 ("sidebar-brand-label", animation_id),
                 row_animation.clone(),
                 move |label, delta| {
@@ -350,7 +350,7 @@ impl Sidebar {
                     .items_center()
                     .justify_center()
                     .child(components::icon(
-                        CadenceIcon::ChevronLeft,
+                        RiddimIcon::ChevronLeft,
                         tokens::CONTROL_ICON,
                         palette.text_primary,
                     ))

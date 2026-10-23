@@ -86,7 +86,7 @@ fn scenes() -> Vec<(&'static str, Scene)> {
 fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage {
     let mut cx = HeadlessAppContext::with_platform(
         gpui_kit::platform::current_platform(true).text_system(),
-        Arc::new(assets::CadenceAssets),
+        Arc::new(assets::RiddimAssets),
         gpui_kit::platform::current_headless_renderer,
     );
     cx.update(|cx| {
@@ -152,13 +152,13 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
     settle(&mut cx, handle.into());
     match scene {
         Scene::SearchEntered => {
-            press_key(&mut cx, handle.into(), "cmd-k");
+            press_key(&mut cx, handle.into(), &format!("{}-k", primary_modifier()));
             for character in "Blue Train".chars() {
                 press_key(&mut cx, handle.into(), &character.to_string());
             }
         }
         Scene::QueueFocus { open } => {
-            press_key(&mut cx, handle.into(), "cmd-k");
+            press_key(&mut cx, handle.into(), &format!("{}-k", primary_modifier()));
             tab_to(&mut cx, handle.into(), "queue-toggle");
             if open {
                 press_key(&mut cx, handle.into(), "space");
@@ -316,7 +316,7 @@ fn compare(
 }
 
 pub(crate) fn run() {
-    let baseline = std::env::var_os("CADENCE_UI_BASELINE")
+    let baseline = std::env::var_os("RIDDIM_UI_BASELINE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/visual/baseline"));
     let artifacts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/ui-artifacts");
@@ -326,8 +326,8 @@ pub(crate) fn run() {
     let record = std::env::args().any(|argument| argument == "--record");
     if record {
         assert!(
-            std::env::var_os("CADENCE_UI_BASELINE").is_some(),
-            "Recording requires an explicit CADENCE_UI_BASELINE directory"
+            std::env::var_os("RIDDIM_UI_BASELINE").is_some(),
+            "Recording requires an explicit RIDDIM_UI_BASELINE directory"
         );
         std::fs::create_dir_all(&baseline).expect("create baseline directory");
     }

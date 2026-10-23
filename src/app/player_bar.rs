@@ -115,7 +115,7 @@ impl PlayerBar {
 
     fn queue_button(
         &self,
-        palette: CadencePalette,
+        palette: RiddimPalette,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::base::Button {
@@ -133,7 +133,7 @@ impl PlayerBar {
             .focus_visible(|style| style.border_2().border_color(rgb(palette.focus_ring)))
             .when(self.queue_open, |button| button.bg(rgb(palette.selection)))
             .child(components::icon(
-                CadenceIcon::Queue,
+                RiddimIcon::Queue,
                 tokens::CONTROL_ICON,
                 palette.text_primary,
             ))
@@ -155,7 +155,7 @@ impl PlayerBar {
     /// the art would never show.
     fn artwork_link(
         &self,
-        palette: CadencePalette,
+        palette: RiddimPalette,
         track: Option<&model::Track>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -173,7 +173,7 @@ impl PlayerBar {
             &self.image_cache,
             track.artwork_url.as_deref(),
             tokens::PLAYER_ARTWORK,
-            CadenceIcon::MusicNote,
+            RiddimIcon::MusicNote,
         );
         match playing_album(Some(track)) {
             Some(album) => gpui_kit::base::Button::new("player-artwork")
@@ -193,7 +193,7 @@ impl PlayerBar {
     }
 
     fn title_line(
-        palette: CadencePalette,
+        palette: RiddimPalette,
         track: Option<&model::Track>,
         window: &Window,
         cx: &mut Context<Self>,
@@ -223,7 +223,7 @@ impl PlayerBar {
     }
 
     fn credits_line(
-        palette: CadencePalette,
+        palette: RiddimPalette,
         track: Option<&model::Track>,
         window: &Window,
         cx: &mut Context<Self>,
@@ -244,7 +244,7 @@ impl PlayerBar {
     }
 
     fn artist_link(
-        palette: CadencePalette,
+        palette: RiddimPalette,
         index: usize,
         artist: model::ArtistRef,
         window: &Window,
@@ -306,9 +306,9 @@ impl PlayerBar {
             |track| format_duration(track.duration_ms),
         ));
         let volume_icon = if volume == 0. {
-            CadenceIcon::SpeakerMuted
+            RiddimIcon::SpeakerMuted
         } else {
-            CadenceIcon::Speaker
+            RiddimIcon::Speaker
         };
         let duration_ms = now_playing.as_ref().map_or(0, |track| track.duration_ms);
         div()
@@ -396,7 +396,7 @@ impl PlayerBar {
                             .items_center()
                             .gap_2()
                             .child(
-                                components::icon_button(palette, "previous", CadenceIcon::SkipBack)
+                                components::icon_button(palette, "previous", RiddimIcon::SkipBack)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.player.update(cx, |player, cx| player.previous(cx));
                                     })),
@@ -413,9 +413,9 @@ impl PlayerBar {
                                     } else {
                                         components::icon(
                                             if playing {
-                                                CadenceIcon::Pause
+                                                RiddimIcon::Pause
                                             } else {
-                                                CadenceIcon::Play
+                                                RiddimIcon::Play
                                             },
                                             tokens::PLAYBACK_ICON,
                                             palette.on_accent,
@@ -428,7 +428,7 @@ impl PlayerBar {
                                     })),
                             )
                             .child(
-                                components::icon_button(palette, "next", CadenceIcon::SkipForward)
+                                components::icon_button(palette, "next", RiddimIcon::SkipForward)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.player.update(cx, |player, cx| player.next(cx));
                                     })),
@@ -593,7 +593,7 @@ impl QueueDrawer {
                             .child("Queue"),
                     )
                     .child(
-                        components::icon_button(palette, "close-queue", CadenceIcon::Close)
+                        components::icon_button(palette, "close-queue", RiddimIcon::Close)
                             .test_support()
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(CloseQueue))),
                     ),
@@ -652,7 +652,7 @@ impl QueueDrawer {
 
     fn row(
         &self,
-        palette: CadencePalette,
+        palette: RiddimPalette,
         id: impl Into<ElementId>,
         track: model::Track,
         current: bool,
@@ -689,7 +689,7 @@ impl QueueDrawer {
                 } else {
                     tokens::TRACK_ARTWORK
                 },
-                CadenceIcon::MusicNote,
+                RiddimIcon::MusicNote,
             ))
             .child(
                 div()
@@ -775,7 +775,7 @@ impl PlayerBar {
 
     pub(super) fn seek_bar(
         &mut self,
-        palette: CadencePalette,
+        palette: RiddimPalette,
         position_ms: u32,
         duration_ms: u32,
         width: Rems,

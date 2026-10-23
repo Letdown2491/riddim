@@ -252,7 +252,7 @@ impl Workspace {
 
     fn action_notice_banner(
         &self,
-        palette: CadencePalette,
+        palette: RiddimPalette,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let message = self.action_notice.clone()?;
@@ -268,7 +268,7 @@ impl Workspace {
 
     /// Covers the workspace while there is no signed-in session. The sign-in
     /// window carries the actual flow; this only points at it.
-    fn signed_out_scrim(&self, palette: CadencePalette, cx: &mut Context<Self>) -> Option<Div> {
+    fn signed_out_scrim(&self, palette: RiddimPalette, cx: &mut Context<Self>) -> Option<Div> {
         let state = *self.session.read(cx).state();
         let card = div()
             .p_7()
@@ -329,7 +329,7 @@ impl Workspace {
         )
     }
 
-    fn app_change_confirmation(&self, palette: CadencePalette, cx: &mut Context<Self>) -> Div {
+    fn app_change_confirmation(&self, palette: RiddimPalette, cx: &mut Context<Self>) -> Div {
         chrome::spotify_app_change_confirmation(
             palette,
             self.session.read(cx).profile().is_some(),
@@ -363,7 +363,7 @@ impl Render for Workspace {
         });
 
         div()
-            .id("cadence-root")
+            .id("riddim-root")
             .key_context(WORKSPACE_KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .capture_any_mouse_down(cx.listener(Self::focus_on_pointer_press))

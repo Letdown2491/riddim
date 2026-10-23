@@ -81,7 +81,7 @@ impl LibrarySection {
                 },
                 library.reloading(),
             ),
-            Self::Favorites => "Starred in Cadence".to_owned(),
+            Self::Favorites => "Starred in Riddim".to_owned(),
             Self::Recent => "Listening history".to_owned(),
         }
     }

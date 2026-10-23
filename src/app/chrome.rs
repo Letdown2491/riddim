@@ -90,7 +90,7 @@ impl Toolbar {
 
     fn search_field(
         &self,
-        palette: CadencePalette,
+        palette: RiddimPalette,
         compact: bool,
         window: &Window,
         cx: &App,
@@ -109,7 +109,7 @@ impl Toolbar {
             .text_sm()
             .text_color(rgb(palette.text_muted))
             .child(components::icon(
-                CadenceIcon::Search,
+                RiddimIcon::Search,
                 tokens::FIELD_ICON,
                 palette.text_muted,
             ))
@@ -161,7 +161,7 @@ impl Toolbar {
         )
     }
 
-    fn account_menu(&self, palette: CadencePalette, cx: &mut Context<Self>) -> impl IntoElement {
+    fn account_menu(&self, palette: RiddimPalette, cx: &mut Context<Self>) -> impl IntoElement {
         let profile_name = self.profile_name(cx);
         let can_connect = matches!(
             self.session.read(cx).state(),
@@ -199,7 +199,7 @@ impl Toolbar {
                     components::menu_item(
                         palette,
                         "account-connect",
-                        CadenceIcon::Key,
+                        RiddimIcon::Key,
                         "Log in with Spotify",
                         false,
                     )
@@ -220,7 +220,7 @@ impl Toolbar {
                         components::menu_item(
                             palette,
                             "account-settings",
-                            CadenceIcon::Settings,
+                            RiddimIcon::Settings,
                             "Settings",
                             false,
                         )
@@ -235,7 +235,7 @@ impl Toolbar {
                     components::menu_item(
                         palette,
                         "account-logout",
-                        CadenceIcon::SignOut,
+                        RiddimIcon::SignOut,
                         "Logout",
                         true,
                     )
@@ -278,7 +278,7 @@ impl Render for Toolbar {
                             components::icon_button(
                                 palette,
                                 "detail-back",
-                                CadenceIcon::ChevronLeft,
+                                RiddimIcon::ChevronLeft,
                             )
                             .on_click(cx.listener(
                                 move |_, _, _, cx| {
@@ -335,17 +335,17 @@ impl Render for Toolbar {
 }
 
 /// Asks before throwing away the saved Spotify developer app, which cannot be
-/// undone from inside Cadence.
+/// undone from inside Riddim.
 pub(super) fn spotify_app_change_confirmation(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     signed_in: bool,
     cancel: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
     confirm: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Div {
     let consequence = if signed_in {
-        "This signs you out, removes the saved Client ID, and restarts Spotify setup. Your Cadence favorites and settings stay."
+        "This signs you out, removes the saved Client ID, and restarts Spotify setup. Your Riddim favorites and settings stay."
     } else {
-        "This removes the saved Client ID and restarts Spotify setup. Your Cadence favorites and settings stay."
+        "This removes the saved Client ID and restarts Spotify setup. Your Riddim favorites and settings stay."
     };
     div()
         .absolute()

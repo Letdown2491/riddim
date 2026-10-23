@@ -13,8 +13,9 @@ struct Published {
     position_seconds: u64,
 }
 
-/// Publishes now-playing information to macOS and accepts the transport
-/// commands it sends back, so Cadence can be driven without its window.
+/// Publishes now-playing information to the system (MPRIS on Linux, MPNowPlaying
+/// on macOS) and accepts the transport
+/// commands it sends back, so Riddim can be driven without its window.
 pub(super) struct SystemMediaControls {
     controls: MediaControls,
     published: Option<Published>,
@@ -28,8 +29,8 @@ impl SystemMediaControls {
     /// app simply goes without media keys.
     pub(super) fn attach(player: Entity<player::Player>, cx: &mut App) -> Option<Self> {
         let mut controls = MediaControls::new(PlatformConfig {
-            display_name: "Cadence",
-            dbus_name: "cadence",
+            display_name: "Riddim",
+            dbus_name: "riddim",
             hwnd: None,
         })
         .ok()?;
@@ -110,7 +111,7 @@ pub(super) enum Transport {
     Seek(u32),
 }
 
-/// Translates a system command, ignoring the ones Cadence does not offer.
+/// Translates a system command, ignoring the ones Riddim does not offer.
 fn transport_for(event: MediaControlEvent) -> Option<Transport> {
     match event {
         MediaControlEvent::Play => Some(Transport::Play),
@@ -191,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn commands_cadence_does_not_offer_are_ignored() {
+    fn commands_riddim_does_not_offer_are_ignored() {
         assert_eq!(transport_for(MediaControlEvent::Raise), None);
         assert_eq!(transport_for(MediaControlEvent::SetVolume(0.5)), None);
     }

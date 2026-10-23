@@ -27,10 +27,10 @@ use crate::{
 };
 
 const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
-const KEYCHAIN_SERVICE: &str = "dev.twoducks.cadence";
+const KEYCHAIN_SERVICE: &str = "dev.twoducks.riddim";
 const KEYCHAIN_ACCOUNT: &str = "oauth-token";
 const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-const LOGGED_OUT_CREDENTIAL: &str = "cadence-logged-out";
+const LOGGED_OUT_CREDENTIAL: &str = "riddim-logged-out";
 /// Spotify's page-size ceiling, used for the head probes.
 const HEAD_PAGE_SIZE: u32 = 50;
 /// How many single-track lookups overlap: enough to fit a 30-track radio

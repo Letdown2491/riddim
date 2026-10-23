@@ -49,7 +49,7 @@ impl BlockingStore {
         let (jobs, receiver) = std::sync::mpsc::channel::<StoreJob>();
         let (initialized, initialization) = tokio::sync::oneshot::channel();
         std::thread::Builder::new()
-            .name("cadence-storage".to_owned())
+            .name("riddim-storage".to_owned())
             .spawn(move || {
                 let mut store = match Store::open_default() {
                     Ok(store) => store,
@@ -553,7 +553,7 @@ impl Backend {
         let (volume, volume_receiver) = tokio::sync::watch::channel(0.72);
         let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
         let thread = thread::Builder::new()
-            .name("cadence-backend".to_owned())
+            .name("riddim-backend".to_owned())
             .spawn(move || {
                 let runtime = tokio::runtime::Runtime::new().expect("could not start Tokio");
                 let acknowledged = runtime.block_on(run(
@@ -568,7 +568,7 @@ impl Backend {
                     let _ = acknowledged.send(());
                 }
             })
-            .expect("could not start the Cadence backend");
+            .expect("could not start the Riddim backend");
         (
             Senders {
                 commands,
@@ -1125,7 +1125,7 @@ impl Worker {
         self.catalog_generation.store(generation, Ordering::Release);
         if self.configuration_is_from_environment() {
             let _ = self.events.send(BackendEvent::SpotifyConfigurationResetFailed(
-                "SPOTIFY_CLIENT_ID is configured by the environment and cannot be changed in Cadence".to_owned(),
+                "SPOTIFY_CLIENT_ID is configured by the environment and cannot be changed in Riddim".to_owned(),
             ));
             return Ok(());
         }
@@ -1169,7 +1169,7 @@ impl Worker {
         if self.configuration_is_from_environment() {
             self.send_configuration_failed(
                 generation,
-                "SPOTIFY_CLIENT_ID is configured by the environment and cannot be changed in Cadence",
+                "SPOTIFY_CLIENT_ID is configured by the environment and cannot be changed in Riddim",
             );
             return Ok(());
         }

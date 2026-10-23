@@ -1,11 +1,11 @@
-//! The app's icon set: Solar glyphs bundled under `assets/icons/cadence`,
+//! The app's icon set: Solar glyphs bundled under `assets/icons/riddim`,
 //! drawn through gpui-kit's `Icon` so they take the text colour and size of
 //! wherever they sit.
 
 use gpui_kit::{SharedString, component::IconNamed};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CadenceIcon {
+pub(super) enum RiddimIcon {
     Heart,
     HeartFilled,
     Star,
@@ -39,7 +39,7 @@ pub(super) enum CadenceIcon {
     ArrowUpRight,
 }
 
-impl CadenceIcon {
+impl RiddimIcon {
     #[cfg(test)]
     pub(super) const ALL: [Self; 31] = [
         Self::Heart,
@@ -112,8 +112,8 @@ impl CadenceIcon {
     }
 }
 
-impl IconNamed for CadenceIcon {
+impl IconNamed for RiddimIcon {
     fn path(self) -> SharedString {
-        format!("icons/cadence/{}.svg", self.file_name()).into()
+        format!("icons/riddim/{}.svg", self.file_name()).into()
     }
 }

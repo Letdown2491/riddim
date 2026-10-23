@@ -1,17 +1,16 @@
 {
   "source": {
-    "cadence": "0.7.2",
+    "riddim": "0.1.0",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "a3e39818cddada4671e742be56af33db40f7afcf",
-    "lockfile_sha256": "a97e77d4d0f0968151e2743cb33d69433000c1223fd48a1cc0eece8a56501efa"
+    "revision": "a1e13cb404b6f5d206e34868597a1b4daa9d5757",
+    "lockfile_sha256": "ef09de2f53342dff2fd598ae21e866fc8d8b14d234339a4ed0cd6cb12ff89857"
   },
   "platform": {
-    "os": "macOS",
-    "version": "15.7.9",
-    "build": "24G830",
-    "architecture": "arm64",
-    "renderer": "Metal"
+    "os": "Linux",
+    "version": "Fedora 44 container on kumaOS 44.12.0 (glibc 2.43 host)",
+    "architecture": "x86_64",
+    "renderer": "Vulkan (headless, lavapipe)"
   },
   "windows_points": [
     [
@@ -38,8 +37,8 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/infomiho/cadence/actions/runs/36423348275",
-  "matching_run": "https://github.com/infomiho/cadence/actions/runs/36422087268",
+  "capture_run": "recorded locally in the riddim-dev container (no hosted capture)",
+  "matching_run": "same capture, repeatable render verified twice per scene",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -51,19 +50,18 @@
       48
     ],
     "platform": {
-      "os": "macOS",
-      "version": "27.0",
-      "build": "26A5425a",
-      "architecture": "aarch64",
-      "renderer": "Metal",
-      "gpu": "Apple M2 Pro"
+      "os": "Linux",
+      "version": "Fedora 44 container on kumaOS 44.12.0",
+      "architecture": "x86_64",
+      "renderer": "Vulkan (headless, lavapipe)",
+      "gpu": "none (software rasterization)"
     },
     "source": {
-      "base_revision": "778765608c220e2e752c03539a221358fcfd478e",
+      "base_revision": "a1e13cb404b6f5d206e34868597a1b4daa9d5757",
       "files_sha256": {
-        "src/app/player_bar.rs": "b1713e45706b2418ef6f910b5d72143b27fa66520be03b3dff1d17abecbe04d5",
-        "src/app/bootstrap.rs": "276438ed5842ca4d20239cd384f426bd7b5b5139357ab58dee4c27d37385e25c",
-        "src/app/test_support/rendering.rs": "e5022988291f8e34e43fc8218486a5c1f4476d8d17a3f0b5a0891645f69576e7"
+        "src/app/player_bar.rs": "50b67c2eb385559e0aa2da9c33c429ac3b17f3a70992d47ecd9593c00b3a8ab5",
+        "src/app/bootstrap.rs": "abb371ac45ecdd679211f21c5f44972ebe98fc82d0d74c0d00ef2ce42169461f",
+        "src/app/test_support/rendering.rs": "6449425899590fd6cf40ebde4fdf814d5bb2d68882db111010563ed2021a6f9e"
       }
     }
   }

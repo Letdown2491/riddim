@@ -13,7 +13,7 @@ pub(super) enum OnboardingEvent {
     ClearError,
 }
 
-/// The screens shown before Cadence has a usable Spotify session: setup,
+/// The screens shown before Riddim has a usable Spotify session: setup,
 /// sign-in, and the backend failure notice.
 pub(super) struct Onboarding {
     session: Entity<session::Session>,
@@ -143,7 +143,7 @@ impl Onboarding {
                         .text_2xl()
                         .font_weight(gpui_kit::FontWeight::BOLD)
                         .text_color(rgb(palette.text_primary))
-                        .child("Cadence could not start"),
+                        .child("Riddim could not start"),
                 )
                 .child(
                     div()
@@ -191,7 +191,7 @@ impl Onboarding {
                             .text_lg()
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                             .text_color(rgb(palette.text_primary))
-                            .child("Cadence"),
+                            .child("Riddim"),
                     ),
             )
             .child(
@@ -201,7 +201,7 @@ impl Onboarding {
                     .line_height(relative(1.12))
                     .font_weight(gpui_kit::FontWeight::BOLD)
                     .text_color(rgb(palette.text_primary))
-                    .child("Your Spotify,\nin Cadence"),
+                    .child("Your Spotify,\nin Riddim"),
             )
             .child(
                 div()
@@ -210,7 +210,7 @@ impl Onboarding {
                     .line_height(relative(1.55))
                     .text_color(rgb(palette.text_muted))
                     .child(
-                        "Use a Spotify developer app you control. Cadence stores only its public Client ID.",
+                        "Use a Spotify developer app you control. Riddim stores only its public Client ID.",
                     ),
             )
             .when(show_configuration, |rail| {
@@ -247,7 +247,7 @@ impl Onboarding {
                 div()
                     .text_size(tokens::CAPTION_TEXT)
                     .text_color(rgb(palette.text_muted))
-                    .child("Saved in Cadence"),
+                    .child("Saved in Riddim"),
             )
             .child(
                 div()
@@ -294,14 +294,14 @@ impl Onboarding {
                             .text_size(tokens::CAPTION_TEXT)
                             .line_height(relative(1.4))
                             .text_color(rgb(palette.text_muted))
-                            .child("Change SPOTIFY_CLIENT_ID outside Cadence."),
+                            .child("Change SPOTIFY_CLIENT_ID outside Riddim."),
                     )
                 },
             )
     }
 
     fn onboarding_task_header(
-        palette: CadencePalette,
+        palette: RiddimPalette,
         title: &'static str,
         detail: &'static str,
     ) -> Div {
@@ -390,7 +390,7 @@ impl Onboarding {
                                     .child(
                                         components::icon_button_sized(appearance::Appearance::palette(cx),
                                             "copy-spotify-redirect",
-                                            CadenceIcon::Copy,
+                                            RiddimIcon::Copy,
                                             tokens::FIELD_ICON,
                                         )
                                             .size_9()
@@ -479,7 +479,7 @@ impl Onboarding {
             )
     }
 
-    fn spotify_client_id_field(&self, palette: CadencePalette, window: &Window, cx: &App) -> Div {
+    fn spotify_client_id_field(&self, palette: RiddimPalette, window: &Window, cx: &App) -> Div {
         components::text_field_frame(palette, &self.client_id_input, window, cx)
             .h_12()
             .w_full()
@@ -512,7 +512,7 @@ impl Onboarding {
             .justify_center()
             .child(Self::onboarding_task_header(palette,
                 "Log in to Spotify",
-                "Spotify will ask you to approve Cadence twice: first for your library, then for playback.",
+                "Spotify will ask you to approve Riddim twice: first for your library, then for playback.",
             ))
             .when(!configuration_blocked, |form| {
                 form.child(div().mt_8().flex().justify_start().child(if connecting {
@@ -546,7 +546,7 @@ impl Onboarding {
             })
     }
 
-    fn onboarding_step_number(palette: CadencePalette, number: &'static str) -> Div {
+    fn onboarding_step_number(palette: RiddimPalette, number: &'static str) -> Div {
         div()
             .size_8()
             .flex_none()
@@ -562,7 +562,7 @@ impl Onboarding {
             .child(number)
     }
 
-    fn onboarding_step_title(palette: CadencePalette, title: &'static str) -> Div {
+    fn onboarding_step_title(palette: RiddimPalette, title: &'static str) -> Div {
         div()
             .text_size(tokens::STEP_TITLE_TEXT)
             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
@@ -570,7 +570,7 @@ impl Onboarding {
             .child(title)
     }
 
-    fn onboarding_detail(palette: CadencePalette, detail: &'static str) -> Div {
+    fn onboarding_detail(palette: RiddimPalette, detail: &'static str) -> Div {
         div()
             .mt_2()
             .text_sm()

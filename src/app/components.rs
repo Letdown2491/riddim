@@ -1,4 +1,4 @@
-//! Shared building blocks for Cadence views.
+//! Shared building blocks for Riddim views.
 //!
 //! These are free functions rather than methods so that every view entity can
 //! reach them, and they take the palette by value so a view always draws with
@@ -26,7 +26,7 @@ fn keyboard_control(element: Stateful<Div>) -> Stateful<Div> {
 /// A keyboard control that draws the focus ring inside its own edge, so the
 /// ring follows the control's radius, takes no layout space and no clipping
 /// ancestor can hide it.
-pub(super) fn control(palette: CadencePalette, element: Stateful<Div>) -> Stateful<Div> {
+pub(super) fn control(palette: RiddimPalette, element: Stateful<Div>) -> Stateful<Div> {
     keyboard_control(element).focus_visible(|style| style.shadow(inset_focus_ring(palette)))
 }
 
@@ -39,7 +39,7 @@ pub(super) fn bare_button(id: impl Into<ElementId>) -> Stateful<Div> {
         .justify_center()
 }
 
-pub(super) fn button(palette: CadencePalette, id: impl Into<ElementId>) -> Stateful<Div> {
+pub(super) fn button(palette: RiddimPalette, id: impl Into<ElementId>) -> Stateful<Div> {
     control(palette, div().id(id))
         .flex()
         .items_center()
@@ -48,21 +48,21 @@ pub(super) fn button(palette: CadencePalette, id: impl Into<ElementId>) -> State
 
 /// A button whose own fill covers it. The ring sits outside the edge, where it
 /// contrasts with the surface around the button rather than with the fill.
-pub(super) fn filled_button(palette: CadencePalette, id: impl Into<ElementId>) -> Stateful<Div> {
+pub(super) fn filled_button(palette: RiddimPalette, id: impl Into<ElementId>) -> Stateful<Div> {
     bare_button(id).focus_visible(|style| style.shadow(outset_focus_ring(palette)))
 }
 
-pub(super) fn inset_focus_ring(palette: CadencePalette) -> Vec<gpui_kit::BoxShadow> {
+pub(super) fn inset_focus_ring(palette: RiddimPalette) -> Vec<gpui_kit::BoxShadow> {
     vec![focus_ring_shadow(palette).inset()]
 }
 
 /// Painted under the element, so only an element with an opaque fill shows it
 /// as a ring.
-fn outset_focus_ring(palette: CadencePalette) -> Vec<gpui_kit::BoxShadow> {
+fn outset_focus_ring(palette: RiddimPalette) -> Vec<gpui_kit::BoxShadow> {
     vec![focus_ring_shadow(palette)]
 }
 
-fn focus_ring_shadow(palette: CadencePalette) -> gpui_kit::BoxShadow {
+fn focus_ring_shadow(palette: RiddimPalette) -> gpui_kit::BoxShadow {
     gpui_kit::BoxShadow::new(px(0.), px(0.), rgb(palette.focus_ring).into())
         .spread_radius(FOCUS_RING_WIDTH)
 }
@@ -77,7 +77,7 @@ pub(super) fn is_focus_visible(focus_handle: &FocusHandle, window: &Window) -> b
 /// focus got there, as a macOS text field does. The frame keeps its one-pixel
 /// border and the ring grows inward from it, so the text does not move.
 pub(super) fn text_field_frame(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     input: &Entity<InputState>,
     window: &Window,
     cx: &App,
@@ -100,7 +100,7 @@ pub(super) fn text_field_frame(
 
 /// A button that sits flush with the content around it: its padding makes
 /// room for the focus ring and its negative margin takes that room back.
-pub(super) fn flush_button(palette: CadencePalette, id: impl Into<ElementId>) -> Stateful<Div> {
+pub(super) fn flush_button(palette: RiddimPalette, id: impl Into<ElementId>) -> Stateful<Div> {
     button(palette, id)
         .px(tokens::FOCUS_RING_CLEARANCE)
         .mx(-tokens::FOCUS_RING_CLEARANCE)
@@ -110,7 +110,7 @@ pub(super) fn flush_button(palette: CadencePalette, id: impl Into<ElementId>) ->
 /// focus is inside it. The wrapper tracks `focus_handle` only to observe that
 /// focus, so it must not be a Tab stop itself.
 pub(super) fn focus_ring_around(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     focus_handle: &FocusHandle,
     window: &Window,
     cx: &App,
@@ -143,7 +143,7 @@ pub(super) fn is_focus_visible_within(
 /// observe its base link in tests. The button's neutral line height is set
 /// back to the window's so the text keeps its metrics.
 pub(super) fn link(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     id: impl Into<ElementId>,
     window: &Window,
 ) -> gpui_kit::base::Button {
@@ -157,7 +157,7 @@ pub(super) fn link(
 
 /// The transient banner for things that finished without a page to say so.
 pub(super) fn action_notice_banner(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     message: SharedString,
     on_dismiss: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
@@ -183,7 +183,7 @@ pub(super) fn action_notice_banner(
             .text_color(rgb(palette.text_primary))
             .child(div().flex_1().child(message))
             .child(
-                icon_button(palette, "dismiss-action-notice", CadenceIcon::Close)
+                icon_button(palette, "dismiss-action-notice", RiddimIcon::Close)
                     .size_8()
                     .on_click(on_dismiss),
             ),
@@ -191,12 +191,12 @@ pub(super) fn action_notice_banner(
     .into_any_element()
 }
 
-pub(super) fn icon(glyph: CadenceIcon, size: Rems, color: u32) -> Icon {
+pub(super) fn icon(glyph: RiddimIcon, size: Rems, color: u32) -> Icon {
     Icon::new(glyph).size(size).text_color(rgb(color))
 }
 
 pub(super) fn pill(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     primary: bool,
@@ -214,7 +214,7 @@ pub(super) fn pill(
 /// A primary pill for an action already under way. It looks like [`pill`] at
 /// rest but is not a control, so it is neither a Tab stop nor hoverable.
 pub(super) fn pending_pill(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
 ) -> Stateful<Div> {
@@ -222,7 +222,7 @@ pub(super) fn pending_pill(
     pill_surface(palette, frame, true).child(label.into())
 }
 
-fn pill_surface(palette: CadencePalette, frame: Stateful<Div>, primary: bool) -> Stateful<Div> {
+fn pill_surface(palette: RiddimPalette, frame: Stateful<Div>, primary: bool) -> Stateful<Div> {
     let (background, foreground) = if primary {
         (rgb(palette.text_primary), rgb(palette.surface))
     } else {
@@ -239,17 +239,17 @@ fn pill_surface(palette: CadencePalette, frame: Stateful<Div>, primary: bool) ->
 }
 
 pub(super) fn icon_button(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     id: impl Into<ElementId>,
-    glyph: CadenceIcon,
+    glyph: RiddimIcon,
 ) -> Stateful<Div> {
     icon_button_sized(palette, id, glyph, tokens::CONTROL_ICON)
 }
 
 pub(super) fn icon_button_sized(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     id: impl Into<ElementId>,
-    glyph: CadenceIcon,
+    glyph: RiddimIcon,
     size: Rems,
 ) -> Stateful<Div> {
     button(palette, id)
@@ -263,9 +263,9 @@ pub(super) fn icon_button_sized(
 }
 
 pub(super) fn menu_item(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     id: impl Into<ElementId>,
-    glyph: CadenceIcon,
+    glyph: RiddimIcon,
     label: &'static str,
     destructive: bool,
 ) -> Stateful<Div> {
@@ -289,7 +289,7 @@ pub(super) fn menu_item(
 }
 
 pub(super) fn text_menu_item(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     id: impl Into<ElementId>,
     label: &'static str,
 ) -> Stateful<Div> {
@@ -300,7 +300,7 @@ pub(super) fn text_menu_item(
 /// A menu item for an action that does not apply right now: muted, not
 /// hoverable and not a Tab stop.
 pub(super) fn disabled_text_menu_item(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     id: impl Into<ElementId>,
     label: &'static str,
 ) -> Stateful<Div> {
@@ -321,7 +321,7 @@ fn text_menu_row(row: Stateful<Div>, label: &'static str, color: u32) -> Statefu
 
 /// The outlined secondary button used by the setup screens and settings.
 pub(super) fn settings_button(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     id: impl Into<ElementId>,
     label: &'static str,
 ) -> Stateful<Div> {
@@ -339,7 +339,7 @@ pub(super) fn settings_button(
         .child(label)
 }
 
-pub(super) fn menu_surface(palette: CadencePalette) -> Div {
+pub(super) fn menu_surface(palette: RiddimPalette) -> Div {
     div()
         .occlude()
         .w(tokens::MENU_WIDTH)
@@ -365,7 +365,7 @@ pub(super) fn revalidating_detail(detail: impl Into<String>, refreshing: bool) -
     }
 }
 
-pub(super) fn section_label(palette: CadencePalette, text: impl Into<SharedString>) -> Div {
+pub(super) fn section_label(palette: RiddimPalette, text: impl Into<SharedString>) -> Div {
     div()
         .text_size(tokens::BODY_TEXT)
         .font_weight(gpui_kit::FontWeight::MEDIUM)
@@ -373,7 +373,7 @@ pub(super) fn section_label(palette: CadencePalette, text: impl Into<SharedStrin
         .child(text.into())
 }
 
-pub(super) fn empty_state(palette: CadencePalette, text: impl Into<SharedString>) -> Div {
+pub(super) fn empty_state(palette: RiddimPalette, text: impl Into<SharedString>) -> Div {
     div()
         .p_6()
         .rounded(tokens::PANEL_RADIUS)
@@ -384,11 +384,11 @@ pub(super) fn empty_state(palette: CadencePalette, text: impl Into<SharedString>
 }
 
 pub(super) fn artwork(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     image_cache: &Entity<image_cache::BoundedImageCache>,
     url: Option<&str>,
     artwork_size: tokens::ArtworkSize,
-    fallback_icon: CadenceIcon,
+    fallback_icon: RiddimIcon,
 ) -> gpui_kit::AnyElement {
     let frame = div()
         .size(artwork_size.size)
@@ -448,7 +448,7 @@ pub(super) fn initials(name: &str) -> String {
 }
 
 /// The large title a page opens with.
-pub(super) fn page_title(palette: CadencePalette, title: impl Into<SharedString>) -> Div {
+pub(super) fn page_title(palette: RiddimPalette, title: impl Into<SharedString>) -> Div {
     div()
         .text_size(tokens::PAGE_TITLE_TEXT)
         .line_height(tokens::PAGE_TITLE_LINE_HEIGHT)
@@ -458,7 +458,7 @@ pub(super) fn page_title(palette: CadencePalette, title: impl Into<SharedString>
 }
 
 /// The subtitle line under a page title.
-pub(super) fn page_detail(palette: CadencePalette, detail: impl Into<SharedString>) -> Div {
+pub(super) fn page_detail(palette: RiddimPalette, detail: impl Into<SharedString>) -> Div {
     div()
         .text_sm()
         .text_color(rgb(palette.text_muted))
@@ -467,7 +467,7 @@ pub(super) fn page_detail(palette: CadencePalette, detail: impl Into<SharedStrin
 
 /// The title and subtitle every page opens with.
 pub(super) fn page_heading(
-    palette: CadencePalette,
+    palette: RiddimPalette,
     title: impl Into<SharedString>,
     detail: impl Into<SharedString>,
 ) -> Div {

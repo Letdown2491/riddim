@@ -6,8 +6,8 @@ use super::*;
 /// clock rather than `Instant`, which stops while the machine sleeps.
 const REVALIDATION_DEBOUNCE: Duration = Duration::from_secs(30);
 
-/// Everything Cadence knows about the listener's music: what Spotify holds for
-/// the account, and what Cadence keeps locally about it.
+/// Everything Riddim knows about the listener's music: what Spotify holds for
+/// the account, and what Riddim keeps locally about it.
 ///
 /// Owned by the services global so a window can be rebuilt without refetching.
 pub(super) struct Library {

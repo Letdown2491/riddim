@@ -6,7 +6,7 @@ const LIBRARY_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 /// Services that outlive any single window.
 ///
-/// Closing the Cadence window must not interrupt playback, so the backend is
+/// Closing the Riddim window must not interrupt playback, so the backend is
 /// owned here instead of by the view that happens to be on screen.
 pub(super) struct AppServices {
     /// Taken during shutdown so the worker thread stops before the process exits.
@@ -57,7 +57,7 @@ impl AppServices {
             image_cache,
             brand_mark: Arc::new(gpui_kit::Image::from_bytes(
                 gpui_kit::ImageFormat::Png,
-                include_bytes!("../../assets/cadence-mark.png").to_vec(),
+                include_bytes!("../../assets/riddim-mark.png").to_vec(),
             )),
             media_controls: None,
             root: None,
@@ -88,7 +88,7 @@ impl AppServices {
         let image_cache = image_cache::BoundedImageCache::new(cx);
         let brand_mark = Arc::new(gpui_kit::Image::from_bytes(
             gpui_kit::ImageFormat::Png,
-            include_bytes!("../../assets/cadence-mark.png").to_vec(),
+            include_bytes!("../../assets/riddim-mark.png").to_vec(),
         ));
         let player_for_media = player.clone();
         // Keep the system's now-playing panel in step with the player.
@@ -164,7 +164,7 @@ impl AppServices {
         cx.global::<Self>().library.clone()
     }
 
-    /// The Cadence mark, drawn by both the sidebar and the setup screen.
+    /// The Riddim mark, drawn by both the sidebar and the setup screen.
     pub(super) fn brand_mark(cx: &App) -> Arc<gpui_kit::Image> {
         cx.global::<Self>().brand_mark.clone()
     }
@@ -174,7 +174,7 @@ impl AppServices {
         cx.global::<Self>().image_cache.clone()
     }
 
-    /// Notifications that another launch of Cadence asked this instance to come
+    /// Notifications that another launch of Riddim asked this instance to come
     /// to the front.
     pub(super) fn activations(cx: &App) -> async_channel::Receiver<()> {
         cx.global::<Self>().lifecycle.activation_receiver()

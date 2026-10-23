@@ -7,7 +7,7 @@ use gpui_kit::component::theme::ThemeColor;
 /// theme change reaches all of them without any of them going stale.
 pub(super) struct Appearance {
     preference: ThemePreference,
-    palette: CadencePalette,
+    palette: RiddimPalette,
 }
 
 impl gpui_kit::Global for Appearance {}
@@ -28,7 +28,7 @@ impl Appearance {
         apply_dark_mode(dark_mode, cx);
     }
 
-    pub(super) fn palette(cx: &App) -> CadencePalette {
+    pub(super) fn palette(cx: &App) -> RiddimPalette {
         cx.global::<Self>().palette
     }
 
@@ -54,11 +54,11 @@ impl Appearance {
     }
 }
 
-fn palette_for(dark_mode: bool) -> CadencePalette {
+fn palette_for(dark_mode: bool) -> RiddimPalette {
     if dark_mode {
-        CadencePalette::DARK
+        RiddimPalette::DARK
     } else {
-        CadencePalette::LIGHT
+        RiddimPalette::LIGHT
     }
 }
 
@@ -78,9 +78,9 @@ fn apply_dark_mode(dark_mode: bool, cx: &mut App) {
     });
 }
 
-/// Paints the component library's controls with Cadence's roles, so an input,
-/// switch or select sits in a Cadence view without its own palette.
-fn apply_palette_to_theme_colors(palette: CadencePalette, colors: &mut ThemeColor) {
+/// Paints the component library's controls with Riddim's roles, so an input,
+/// switch or select sits in a Riddim view without its own palette.
+fn apply_palette_to_theme_colors(palette: RiddimPalette, colors: &mut ThemeColor) {
     colors.background = rgb(palette.canvas).into();
     colors.foreground = rgb(palette.text_primary).into();
     colors.muted_foreground = rgb(palette.text_muted).into();

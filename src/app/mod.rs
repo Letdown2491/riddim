@@ -33,7 +33,7 @@ use gpui_kit::{
     WindowOptions, actions, anchored, deferred, div, ease_out_quint, img, point, prelude::*, px,
     relative, rgb, size, uniform_list,
 };
-use icons::CadenceIcon;
+use icons::RiddimIcon;
 
 use library_pages::LibrarySection;
 use workspace::Workspace;
@@ -45,7 +45,7 @@ mod image_cache;
 pub(crate) mod test_support;
 
 actions!(
-    cadence,
+    riddim,
     [
         OpenSearch,
         TogglePlayback,
@@ -63,7 +63,7 @@ actions!(
 );
 
 /// The key context of the main window.
-const WORKSPACE_KEY_CONTEXT: &str = "Cadence";
+const WORKSPACE_KEY_CONTEXT: &str = "Riddim";
 /// The key context of the onboarding window.
 const ONBOARDING_KEY_CONTEXT: &str = "Onboarding";
 /// The key context of the focused progress slider.
@@ -75,7 +75,7 @@ const CONTROL_KEY_CONTEXT: &str = "Control";
 const INPUT_KEY_CONTEXT: &str = "Input";
 
 /// What the listener sees when a command cannot reach the backend.
-const BACKEND_UNAVAILABLE: &str = "Cadence backend is busy or not running";
+const BACKEND_UNAVAILABLE: &str = "Riddim backend is busy or not running";
 
 /// Dims everything behind a dialog that must be answered, in either appearance.
 const BLOCKING_SCRIM: gpui_kit::Hsla = gpui_kit::Hsla {
@@ -86,7 +86,7 @@ const BLOCKING_SCRIM: gpui_kit::Hsla = gpui_kit::Hsla {
 };
 
 #[derive(Clone, Copy)]
-struct CadencePalette {
+struct RiddimPalette {
     canvas: u32,
     surface: u32,
     surface_raised: u32,
@@ -109,7 +109,7 @@ struct CadencePalette {
     media_border: gpui_kit::Hsla,
 }
 
-impl CadencePalette {
+impl RiddimPalette {
     const LIGHT: Self = Self {
         canvas: 0xFBFAF9,
         surface: 0xFFFFFF,
@@ -411,6 +411,10 @@ mod updater;
 mod windows;
 mod workspace;
 
+pub fn run() {
+    bootstrap::run();
+}
+
 #[cfg(test)]
 mod event_bridge_tests {
     use super::{
@@ -488,10 +492,6 @@ mod event_bridge_tests {
         assert!(index[&model::Provider::Spotify].contains("same-id"));
         assert!(index[&model::Provider::Tidal].contains("same-id"));
     }
-}
-
-pub fn run() {
-    bootstrap::run();
 }
 
 #[cfg(all(test, target_os = "macos"))]

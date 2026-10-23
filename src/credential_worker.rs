@@ -12,7 +12,7 @@ fn jobs() -> Result<&'static mpsc::Sender<Job>> {
     }
     let (sender, receiver) = mpsc::channel::<Job>();
     std::thread::Builder::new()
-        .name("cadence-credentials".to_owned())
+        .name("riddim-credentials".to_owned())
         .spawn(move || {
             while let Ok(job) = receiver.recv() {
                 job();

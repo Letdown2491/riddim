@@ -26,7 +26,7 @@ where
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(format!("{error:#}").into()),
             Err(_) => Err(SharedString::new_static(
-                "Cadence backend stopped before answering",
+                "Riddim backend stopped before answering",
             )),
         }
     }
@@ -423,7 +423,7 @@ impl ArtistPage {
                         &self.image_cache,
                         album.artwork_url.as_deref(),
                         tokens::ALBUM_CARD_ARTWORK,
-                        CadenceIcon::MusicNote,
+                        RiddimIcon::MusicNote,
                     ))
                     .child(
                         div()
@@ -711,7 +711,7 @@ impl Render for PlaylistPage {
                         &self.image_cache,
                         artwork_url.as_deref(),
                         tokens::COLLECTION_ARTWORK,
-                        CadenceIcon::Playlist,
+                        RiddimIcon::Playlist,
                     ))
                     .child(
                         div()
@@ -737,9 +737,9 @@ impl Render for PlaylistPage {
                                             palette,
                                             "playlist-pin",
                                             if pinned {
-                                                CadenceIcon::PinFilled
+                                                RiddimIcon::PinFilled
                                             } else {
-                                                CadenceIcon::Pin
+                                                RiddimIcon::Pin
                                             },
                                         )
                                         .bg(rgb(if pinned {
@@ -820,7 +820,7 @@ impl Render for ArtistPage {
                         &self.image_cache,
                         artwork_url.as_deref(),
                         tokens::ARTIST_ARTWORK,
-                        CadenceIcon::Person,
+                        RiddimIcon::Person,
                     ))
                     .child(
                         div()
@@ -932,7 +932,7 @@ impl Render for AlbumPage {
                         &self.image_cache,
                         artwork_url.as_deref(),
                         tokens::COLLECTION_ARTWORK,
-                        CadenceIcon::MusicNote,
+                        RiddimIcon::MusicNote,
                     ))
                     .child(
                         div()

@@ -43,8 +43,8 @@ impl InstanceLifecycle {
     }
 
     pub fn acquire() -> Result<Instance> {
-        let project_dirs = ProjectDirs::from("dev", "twoducks", "cadence")
-            .context("could not determine the Cadence cache directory")?;
+        let project_dirs = ProjectDirs::from("dev", "twoducks", "riddim")
+            .context("could not determine the Riddim cache directory")?;
         Self::acquire_at(project_dirs.cache_dir().join("activation.sock"))
     }
 
@@ -86,7 +86,7 @@ impl InstanceLifecycle {
         let shutdown = Arc::new(AtomicBool::new(false));
         let listener_shutdown = shutdown.clone();
         let listener_thread = thread::Builder::new()
-            .name("cadence-activation".into())
+            .name("riddim-activation".into())
             .spawn(move || {
                 while !listener_shutdown.load(Ordering::Relaxed) {
                     match listener.accept() {
@@ -172,7 +172,7 @@ mod tests {
 
     fn socket_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "cadence-lifecycle-{}-{name}.sock",
+            "riddim-lifecycle-{}-{name}.sock",
             std::process::id()
         ))
     }

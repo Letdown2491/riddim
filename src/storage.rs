@@ -56,15 +56,15 @@ pub struct Store {
 
 impl Store {
     pub fn open_default() -> Result<Self> {
-        let project = ProjectDirs::from("dev", "twoducks", "cadence")
-            .context("could not resolve the Cadence data directory")?;
+        let project = ProjectDirs::from("dev", "twoducks", "riddim")
+            .context("could not resolve the Riddim data directory")?;
         std::fs::create_dir_all(project.data_dir())
-            .context("could not create the Cadence data directory")?;
-        Self::open(project.data_dir().join("cadence.sqlite3"))
+            .context("could not create the Riddim data directory")?;
+        Self::open(project.data_dir().join("riddim.sqlite3"))
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let connection = Connection::open(path).context("could not open the Cadence database")?;
+        let connection = Connection::open(path).context("could not open the Riddim database")?;
         connection.busy_timeout(Duration::from_secs(2))?;
         let store = Self { connection };
         store.migrate()?;
@@ -88,7 +88,7 @@ impl Store {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version > 5 {
-            anyhow::bail!("database schema version {version} is newer than this Cadence build");
+            anyhow::bail!("database schema version {version} is newer than this Riddim build");
         }
         if version < 4 {
             self.migrate_to_4(version)?;

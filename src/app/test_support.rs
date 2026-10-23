@@ -8,6 +8,16 @@ use gpui_kit::{
 #[allow(dead_code)]
 pub(crate) mod rendering;
 
+/// The primary modifier on the running platform, for keystrokes the app binds
+/// per platform: Cmd on macOS, Ctrl everywhere else.
+pub(super) fn primary_modifier() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    }
+}
+
 mod interactions;
 
 pub(super) struct BackendProbe {
@@ -37,7 +47,7 @@ pub(super) fn track(index: usize) -> model::Track {
         spotify_uri: Some(format!("spotify:track:track-{index}")),
         isrc: None,
         title: format!("Song {}", index + 1).into(),
-        artist: "Cadence Ensemble".into(),
+        artist: "Riddim Ensemble".into(),
         artists: Vec::new(),
         album: "An afternoon in September".into(),
         album_ref: None,
@@ -117,7 +127,7 @@ pub(super) fn settle(cx: &mut HeadlessAppContext, window: AnyWindowHandle) {
     }
 }
 
-/// More Tab stops than any Cadence window has, so a Tab walk that runs past it
+/// More Tab stops than any Riddim window has, so a Tab walk that runs past it
 /// has missed its target.
 const MAX_TAB_STOPS: usize = 64;
 
