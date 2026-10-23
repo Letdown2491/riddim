@@ -2,10 +2,10 @@
 
 ## Vadivam audio-waveform icon
 
-The Cadence mark incorporates the `audio-waveform` icon from
+The Riddim mark incorporates the `audio-waveform` icon from
 [Vadivam](https://github.com/praveenjuge/vadivam), created by Praveen Juge.
 
-The source path was adapted in scale, color, and framing for Cadence.
+The source path was adapted in scale, color, and framing for Riddim.
 
 MIT License
 
@@ -31,7 +31,7 @@ SOFTWARE.
 
 ## Solar Icons
 
-The interface icons in `assets/icons/cadence` are from
+The interface icons in `assets/icons/riddim` are from
 [Solar Icons](https://www.figma.com/community/file/1166831539721848736) by
 480 Design, in the Linear and Bold styles, taken from the
 [Iconify](https://github.com/iconify/icon-sets) `solar` set. The glyphs are

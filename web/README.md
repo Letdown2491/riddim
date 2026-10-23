@@ -1,6 +1,6 @@
-# cadence-web
+# riddim-web
 
-Landing page and release notes for Cadence.
+Landing page and release notes for Riddim.
 
 A small server renders the pages once at boot from the GitHub releases API,
 keeps them in memory, and refreshes them every 30 minutes. HTML is served with
@@ -21,6 +21,11 @@ Serves on `http://localhost:3000`.
 | `GITHUB_REPO` | `infomiho/cadence` | Repository to read releases from |
 | `GITHUB_TOKEN` | unset | Raises the GitHub API rate limit |
 | `SITE_URL` | `https://cadence.miho.dev` | Absolute URLs in meta tags |
+
+Riddim has no published repository, release channel, or site yet, so the
+defaults above are still cadence's. Update them (and the compiled defaults in
+`src/`) when riddim's distribution story exists. The `download` route still
+points at a DMG; a Linux channel replaces it.
 
 ## Generated assets
 
