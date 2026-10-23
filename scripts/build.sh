@@ -25,6 +25,7 @@ podman run --rm \
   -v riddim-rustup-home:/root/.rustup \
   --env SPOTIFY_CLIENT_ID \
   --env RIDDIM_UI_BASELINE \
+  --env RUSTFLAGS='-C link-arg=-Wl,-rpath,$ORIGIN/riddim-libs' \
   "$IMAGE" \
   bash -c '
     if [ ! -x /root/.cargo/bin/cargo ]; then
@@ -36,14 +37,33 @@ podman run --rm \
   ' _ "$@"
 
 # The binary runs on the host, where the Wayland session, Vulkan driver,
-# audio stack, and secret service live.
+# audio stack, and secret service live. The container's library set is a
+# superset of the host's: any shared library the binary needs that the host
+# lacks (libxkbcommon-x11 on this Wayland-only OS, today) is copied from the
+# image into riddim-libs/ beside the binary, which the rpath above resolves.
 if [ "${1:-}" = "build" ]; then
-  mkdir -p ~/.local/bin
   profile=debug
   for argument in "$@"; do
     case "$argument" in --release) profile=release ;; esac
   done
+  binary="target/$profile/riddim"
+  libs="target/$profile/riddim-libs"
+  mkdir -p "$libs"
+  missing=$(ldd "$binary" 2>/dev/null | awk '/not found/ {print $1}' | sort -u)
+  if [ -n "$missing" ]; then
+    podman run --rm -v "$PWD":/work:Z "$IMAGE" bash -c "
+      for lib in $missing; do cp -L \"/usr/lib64/\$lib\" /work/$libs/; done
+    "
+  fi
+  if ldd "$binary" 2>/dev/null | grep -q 'not found'; then
+    echo "error: unresolved shared libraries:" >&2
+    ldd "$binary" 2>/dev/null | grep 'not found' >&2
+    exit 1
+  fi
   # rename(2) over a running binary works where cp fails with Text file busy
-  cp "target/$profile/riddim" ~/.local/bin/riddim.new
+  mkdir -p ~/.local/bin
+  cp "$binary" ~/.local/bin/riddim.new
   mv -f ~/.local/bin/riddim.new ~/.local/bin/riddim
+  rm -rf ~/.local/bin/riddim-libs
+  cp -r "$libs" ~/.local/bin/riddim-libs
 fi
