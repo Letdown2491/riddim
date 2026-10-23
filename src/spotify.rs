@@ -613,7 +613,8 @@ impl Spotify {
                     .collect::<std::collections::HashMap<&str, &str>>();
                 let body = self
                     .client
-                    .api_get("https://api.spotify.com/v1/me/shows", &query)
+                    // Relative to rspotify's API base; `api_get` prepends it.
+                    .api_get("me/shows", &query)
                     .await?;
                 let page: Page<rspotify::model::Show> = serde_json::from_str(&body)?;
                 let returned = page.items.len() as u32;
