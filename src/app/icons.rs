@@ -37,11 +37,12 @@ pub(super) enum RiddimIcon {
     Moon,
     Copy,
     ArrowUpRight,
+    Mic,
 }
 
 impl RiddimIcon {
     #[cfg(test)]
-    pub(super) const ALL: [Self; 31] = [
+    pub(super) const ALL: [Self; 32] = [
         Self::Heart,
         Self::HeartFilled,
         Self::Star,
@@ -73,6 +74,7 @@ impl RiddimIcon {
         Self::Moon,
         Self::Copy,
         Self::ArrowUpRight,
+        Self::Mic,
     ];
 
     fn file_name(self) -> &'static str {
@@ -108,6 +110,7 @@ impl RiddimIcon {
             Self::Moon => "moon",
             Self::Copy => "copy",
             Self::ArrowUpRight => "arrow-up-right",
+            Self::Mic => "mic",
         }
     }
 }

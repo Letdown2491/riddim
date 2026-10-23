@@ -183,6 +183,7 @@ impl Workspace {
         self.playlist.update(cx, |page, cx| page.close_menus(cx));
         self.artist.update(cx, |page, cx| page.close_menus(cx));
         self.album.update(cx, |page, cx| page.close_menus(cx));
+        self.show.update(cx, |page, cx| page.close_menus(cx));
     }
 
     pub(super) fn close_account_menu(&mut self, cx: &mut Context<Self>) {
@@ -191,6 +192,9 @@ impl Workspace {
     }
 
     pub(super) fn navigate(&mut self, route: Route, cx: &mut Context<Self>) {
+        if route == Route::Shows {
+            self.shows.update(cx, |page, cx| page.refresh(cx));
+        }
         self.router.navigate(route);
         self.settle_navigation(cx);
     }
@@ -233,6 +237,12 @@ impl Workspace {
         self.settle_navigation(cx);
     }
 
+    pub(super) fn open_show(&mut self, show: model::Show, origin: Route, cx: &mut Context<Self>) {
+        let changed = self.show.update(cx, |page, cx| page.open(show, cx));
+        self.router.open_show(origin, changed);
+        self.settle_navigation(cx);
+    }
+
     /// Clears everything overlaying the page and tells the sidebar where the
     /// listener ended up, whichever way the route changed.
     fn settle_navigation(&mut self, cx: &mut Context<Self>) {
@@ -265,6 +275,7 @@ impl Workspace {
             }
             page::PageEvent::OpenArtist(artist) => self.open_artist(artist.clone(), origin, cx),
             page::PageEvent::OpenAlbum(album) => self.open_album(album.clone(), origin, cx),
+            page::PageEvent::OpenShow(show) => self.open_show(show.clone(), origin, cx),
             page::PageEvent::StartRadio(track) => self.start_track_radio(track.clone(), cx),
         }
         cx.notify();

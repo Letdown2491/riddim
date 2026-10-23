@@ -343,6 +343,89 @@ pub(super) struct PlaylistRow {
     on_open: Option<RowCallback>,
 }
 
+/// One saved podcast show in a list. Stateless, like `PlaylistRow`.
+#[derive(IntoElement)]
+pub(super) struct ShowRow {
+    index: usize,
+    show: model::Show,
+    palette: RiddimPalette,
+    image_cache: Entity<image_cache::BoundedImageCache>,
+    on_open: Option<RowCallback>,
+}
+
+impl ShowRow {
+    pub(super) fn new(
+        index: usize,
+        show: model::Show,
+        palette: RiddimPalette,
+        image_cache: Entity<image_cache::BoundedImageCache>,
+    ) -> Self {
+        Self {
+            index,
+            show,
+            palette,
+            image_cache,
+            on_open: None,
+        }
+    }
+
+    pub(super) fn on_open(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_open = Some(Box::new(handler));
+        self
+    }
+}
+
+impl RenderOnce for ShowRow {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let palette = self.palette;
+        let detail = if self.show.publisher.is_empty() {
+            SharedString::new_static("Spotify podcast")
+        } else {
+            self.show.publisher.clone()
+        };
+        components::button(palette, ("spotify-show", self.index))
+            .w_full()
+            .h(tokens::PLAYLIST_ROW_HEIGHT)
+            .px_3()
+            .justify_start()
+            .gap_3p5()
+            .rounded_none()
+            .border_t_1()
+            .border_color(rgb(palette.border))
+            .hover(|style| style.bg(rgb(palette.surface_hover)))
+            .child(components::artwork(
+                palette,
+                &self.image_cache,
+                self.show.artwork_url.as_deref(),
+                tokens::PLAYLIST_ROW_ARTWORK,
+                RiddimIcon::Mic,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .text_color(rgb(palette.text_primary))
+                            .child(self.show.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(palette.text_muted))
+                            .child(detail),
+                    ),
+            )
+            .when_some(self.on_open, |row, handler| row.on_click(handler))
+    }
+}
+
 impl PlaylistRow {
     pub(super) fn new(
         index: usize,

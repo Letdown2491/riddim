@@ -21,7 +21,7 @@ struct NavItem {
     route: Route,
 }
 
-const NAV_ITEMS: [NavItem; 4] = [
+const NAV_ITEMS: [NavItem; 5] = [
     NavItem {
         id: "nav-library",
         fill_id: "nav-library-fill",
@@ -45,6 +45,14 @@ const NAV_ITEMS: [NavItem; 4] = [
         icon: RiddimIcon::Playlist,
         selected_icon: RiddimIcon::PlaylistFilled,
         route: Route::Playlists,
+    },
+    NavItem {
+        id: "nav-podcasts",
+        fill_id: "nav-podcasts-fill",
+        label: "Podcasts",
+        icon: RiddimIcon::Mic,
+        selected_icon: RiddimIcon::Mic,
+        route: Route::Shows,
     },
     NavItem {
         id: "nav-recent",

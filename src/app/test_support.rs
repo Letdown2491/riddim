@@ -53,6 +53,8 @@ pub(super) fn track(index: usize) -> model::Track {
         album_ref: None,
         duration_ms: 240_000,
         artwork_url: None,
+        kind: model::MediaKind::Music,
+        release_date: None,
     }
 }
 

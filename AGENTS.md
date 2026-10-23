@@ -37,12 +37,14 @@ To accept an intended visual change, review the actual renders in
 provenance, and commit:
 
 ```bash
-RIDDIM_UI_BASELINE="$PWD/tests/visual/baseline" \
+RIDDIM_UI_BASELINE=/work/tests/visual/baseline \
   ./scripts/build.sh test --test ui_rendering -- --record
 ```
 
-(The env var must reach the test inside the container; pass it through
-`podman run -e` when invoking directly.)
+(The env var must be a path as the test sees it inside the container, where
+the repo is mounted at `/work`; a host path like `$PWD/tests/visual/baseline`
+does not exist there and the recording silently lands in the container's
+ephemeral layer.)
 
 ## Platform Notes
 

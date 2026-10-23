@@ -11,6 +11,7 @@ pub(super) struct Router {
     playlist_origin: Route,
     artist_origin: Route,
     album_origin: Route,
+    show_origin: Route,
     settings_origin: Route,
 }
 
@@ -21,6 +22,7 @@ impl Router {
             playlist_origin: Route::Playlists,
             artist_origin: Route::LikedSongs,
             album_origin: Route::LikedSongs,
+            show_origin: Route::Shows,
             settings_origin: Route::LikedSongs,
         }
     }
@@ -55,6 +57,13 @@ impl Router {
         self.route = Route::Album;
     }
 
+    pub(super) fn open_show(&mut self, origin: Route, changed: bool) {
+        if changed || self.route != Route::Show {
+            self.set_origin(Route::Show, origin);
+        }
+        self.route = Route::Show;
+    }
+
     /// Points `route` back at `origin`. Two detail pages can open each other,
     /// an album from its artist and that artist from the album, and if each
     /// remembered the other the back button would circle between them. So
@@ -73,6 +82,7 @@ impl Router {
             Route::Playlist => Some(self.playlist_origin),
             Route::Artist => Some(self.artist_origin),
             Route::Album => Some(self.album_origin),
+            Route::Show => Some(self.show_origin),
             Route::Settings => Some(self.settings_origin),
             _ => None,
         }
@@ -83,6 +93,7 @@ impl Router {
             Route::Playlist => &mut self.playlist_origin,
             Route::Artist => &mut self.artist_origin,
             Route::Album => &mut self.album_origin,
+            Route::Show => &mut self.show_origin,
             Route::Settings => &mut self.settings_origin,
             _ => unreachable!("only detail routes remember where they came from"),
         }

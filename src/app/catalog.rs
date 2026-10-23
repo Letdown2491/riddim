@@ -8,7 +8,7 @@ use track_list::{PlaylistList, TrackList};
 /// Dropping the returned future is what cancels the request: the page holds it
 /// in a `Task`, so starting a new request drops the previous one and its answer
 /// is discarded rather than overwriting fresher state.
-fn request<T, C>(
+pub(super) fn request<T, C>(
     backend: &BackendHandle,
     command: C,
 ) -> impl Future<Output = Result<T, SharedString>> + use<T, C>
@@ -944,6 +944,193 @@ impl Render for AlbumPage {
                             .child(components::page_detail(palette, detail))
                             .child(
                                 components::pill(palette, "album-play", "Play", true).on_click(
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.play(&playback_tracks, cx);
+                                    }),
+                                ),
+                            ),
+                    ),
+            )
+            .child(list)
+    }
+}
+
+/// A saved podcast show with its episodes, the album page's podcast twin.
+pub(super) struct ShowPage {
+    backend: BackendHandle,
+    reference: Option<model::Show>,
+    show: Option<model::Show>,
+    tracks: Arc<[model::Track]>,
+    loaded: bool,
+    error: Option<SharedString>,
+    loaded_at: Option<SystemTime>,
+    request: Option<gpui_kit::Task<()>>,
+    player: Entity<player::Player>,
+    image_cache: Entity<image_cache::BoundedImageCache>,
+    track_list: Entity<TrackList>,
+    _list_subscription: Subscription,
+}
+
+impl EventEmitter<PageEvent> for ShowPage {}
+
+impl ShowPage {
+    pub(super) fn new(backend: BackendHandle, cx: &mut Context<Self>) -> Self {
+        let track_list = cx.new(|cx| TrackList::new(cx));
+        Self {
+            backend,
+            reference: None,
+            show: None,
+            tracks: Arc::default(),
+            loaded: false,
+            error: None,
+            loaded_at: None,
+            request: None,
+            player: services::AppServices::player(cx),
+            image_cache: services::AppServices::image_cache(cx),
+            _list_subscription: page::forward(&track_list, cx),
+            track_list,
+        }
+    }
+
+    /// Takes down any open row menu, for a route change no click drove.
+    pub(super) fn close_menus(&mut self, cx: &mut Context<Self>) {
+        self.track_list.update(cx, |list, cx| list.close_menu(cx));
+    }
+
+    /// Starts the page's contents from the top, if there is anything to play.
+    pub(super) fn play(&mut self, tracks: &Arc<[model::Track]>, cx: &mut Context<Self>) {
+        if tracks.is_empty() {
+            return;
+        }
+        let tracks = tracks.to_vec();
+        self.player
+            .update(cx, |player, cx| player.play_context(tracks, 0, cx));
+    }
+
+    /// Shows `show`, refetching unless the cached copy is still fresh.
+    /// Reports whether this is a different show than the one already shown.
+    pub(super) fn open(&mut self, show: model::Show, cx: &mut Context<Self>) -> bool {
+        let source_id = show.source_id.clone();
+        let same_show =
+            self.reference.as_ref().map(|show| show.source_id.as_str()) == Some(source_id.as_str());
+        let retrying_failure = same_show && self.error.is_some();
+        let loading = self.request.is_some();
+        let should_refresh = !same_show || (!loading && !catalog_data_is_fresh(self.loaded_at));
+        self.error = None;
+        if !same_show {
+            self.reference = Some(show);
+            self.show = None;
+            self.tracks = Arc::default();
+            self.loaded = false;
+            self.loaded_at = None;
+        } else if retrying_failure {
+            self.loaded = false;
+        }
+        if should_refresh {
+            let reply = request(&self.backend, |respond| BackendCommand::LoadShow {
+                source_id,
+                respond,
+            });
+            self.request = Some(cx.spawn(async move |this, cx| {
+                let result = reply.await;
+                let _ = this.update(cx, |page, cx| {
+                    page.request = None;
+                    match result {
+                        Ok((show, tracks)) => {
+                            page.show = Some(show);
+                            page.tracks = tracks.into();
+                            page.loaded = true;
+                            page.error = None;
+                            page.loaded_at = Some(SystemTime::now());
+                            cx.emit(PageEvent::Loaded);
+                        }
+                        Err(error) => {
+                            if !page.loaded {
+                                page.loaded = true;
+                                page.error = Some(error.clone());
+                            }
+                            cx.emit(PageEvent::Failed(error));
+                        }
+                    }
+                    cx.notify();
+                });
+            }));
+        }
+        cx.notify();
+        !same_show
+    }
+}
+
+impl Render for ShowPage {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = appearance::Appearance::palette(cx);
+        let name = self
+            .show
+            .as_ref()
+            .map(|show| show.name.clone())
+            .or_else(|| self.reference.as_ref().map(|show| show.name.clone()))
+            .unwrap_or_else(|| SharedString::new_static("Show"));
+        let artwork_url = self
+            .show
+            .as_ref()
+            .and_then(|show| show.artwork_url.clone())
+            .or_else(|| {
+                self.reference
+                    .as_ref()
+                    .and_then(|show| show.artwork_url.clone())
+            });
+        let detail = self.show.as_ref().map_or_else(
+            || "Spotify podcast".to_owned(),
+            |show| {
+                let mut details = vec![show.publisher.as_str().to_owned()];
+                details.push(format!("{} episodes", self.tracks.len()));
+                details.join(" · ")
+            },
+        );
+        let tracks = self.tracks.clone();
+        let loaded = self.loaded;
+        let list = if let Some(error) = self.error.as_ref() {
+            components::empty_state(palette, format!("Unable to load show: {error}"))
+                .into_any_element()
+        } else if !tracks.is_empty() {
+            let source_id = self
+                .reference
+                .as_ref()
+                .map(|show| show.source_id.clone())
+                .expect("open only loads shows that have a source id");
+            let list_id = (ElementId::from("show-episodes"), source_id);
+            self.track_list
+                .update(cx, |list, cx| list.show(list_id, tracks.clone(), cx));
+            self.track_list.clone().into_any_element()
+        } else if loaded {
+            components::empty_state(palette, "This show has no playable episodes")
+                .into_any_element()
+        } else {
+            components::empty_state(palette, "Loading episodes…").into_any_element()
+        };
+        let playback_tracks = tracks;
+
+        components::page("show-page")
+            .pt_2()
+            .child(
+                page_header()
+                    .child(components::artwork(
+                        palette,
+                        &self.image_cache,
+                        artwork_url.as_deref(),
+                        tokens::COLLECTION_ARTWORK,
+                        RiddimIcon::Mic,
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_start()
+                            .gap_2()
+                            .child(components::page_title(palette, name))
+                            .child(components::page_detail(palette, detail))
+                            .child(
+                                components::pill(palette, "show-play", "Play", true).on_click(
                                     cx.listener(move |this, _, _, cx| {
                                         this.play(&playback_tracks, cx);
                                     }),

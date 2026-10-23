@@ -304,6 +304,8 @@ enum Route {
     Playlist,
     Artist,
     Album,
+    Shows,
+    Show,
     Settings,
 }
 
@@ -436,6 +438,8 @@ mod event_bridge_tests {
             album_ref: None,
             duration_ms: 1,
             artwork_url: None,
+            kind: model::MediaKind::Music,
+            release_date: None,
         }
     }
 

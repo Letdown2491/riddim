@@ -55,6 +55,40 @@ pub struct Track {
     pub album_ref: Option<AlbumRef>,
     pub duration_ms: u32,
     pub artwork_url: Option<String>,
+    /// Podcast episodes ride the same pipeline as music: the kind only
+    /// changes how rows present themselves and which page they open.
+    #[serde(default)]
+    pub kind: MediaKind,
+    #[serde(default)]
+    pub release_date: Option<String>,
+}
+
+/// What a playable is. Episodes live in the same queue, history, and player
+/// as music, so the difference is presentation-level, not pipeline-level.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    #[default]
+    Music,
+    Episode,
+}
+
+impl MediaKind {
+    pub fn is_episode(self) -> bool {
+        matches!(self, Self::Episode)
+    }
+}
+
+/// A podcast show. Its episodes are [`Track`]s with [`MediaKind::Episode`].
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Show {
+    pub provider: Provider,
+    pub source_id: String,
+    pub spotify_uri: Option<String>,
+    pub name: SharedString,
+    pub publisher: SharedString,
+    pub description: SharedString,
+    pub artwork_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -135,7 +169,7 @@ pub struct QueueItem {
 
 #[cfg(test)]
 mod tests {
-    use super::Track;
+    use super::{MediaKind, Track};
 
     #[test]
     fn persisted_tracks_without_artist_references_still_load() {
@@ -156,5 +190,7 @@ mod tests {
 
         assert!(track.artists.is_empty());
         assert!(track.album_ref.is_none());
+        assert_eq!(track.kind, MediaKind::Music);
+        assert!(track.release_date.is_none());
     }
 }

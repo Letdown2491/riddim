@@ -14,7 +14,7 @@ use librespot::{core::SpotifyUri, playback::player::PlayerEvent};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 use crate::{
-    model::{Album, Artist, CachedLibrary, LibraryFingerprint, Playlist, Track, UserProfile},
+    model::{Album, Artist, CachedLibrary, LibraryFingerprint, Playlist, Show, Track, UserProfile},
     playback::{Playback, PlaybackAuthorization, delete_playback_refresh_token},
     spotify::{
         ClientIdSource, Spotify, SpotifyConfiguration, resolve_configuration, valid_client_id,
@@ -257,6 +257,7 @@ fn set_fingerprint(fingerprint: &SharedFingerprint, value: Option<LibraryFingerp
 }
 pub type ArtistDetails = (Artist, Vec<Track>, Vec<Album>);
 pub type AlbumDetails = (Album, Vec<Track>);
+pub type ShowDetails = (Show, Vec<Track>);
 
 #[derive(Debug)]
 pub enum BackendCommand {
@@ -291,6 +292,13 @@ pub enum BackendCommand {
     LoadAlbum {
         source_id: String,
         respond: Reply<AlbumDetails>,
+    },
+    LoadSavedShows {
+        respond: Reply<Vec<Show>>,
+    },
+    LoadShow {
+        source_id: String,
+        respond: Reply<ShowDetails>,
     },
     StartRadio {
         request_id: u64,
@@ -1068,6 +1076,14 @@ impl Worker {
             }
             BackendCommand::LoadAlbum { source_id, respond } => {
                 self.catalog.album(self.spotify.clone(), source_id, respond);
+                Ok(())
+            }
+            BackendCommand::LoadSavedShows { respond } => {
+                self.catalog.saved_shows(self.spotify.clone(), respond);
+                Ok(())
+            }
+            BackendCommand::LoadShow { source_id, respond } => {
+                self.catalog.show(self.spotify.clone(), source_id, respond);
                 Ok(())
             }
             BackendCommand::StartRadio { request_id, seed } => {
@@ -2062,6 +2078,8 @@ struct CatalogFetches {
     playlist: Option<tokio::task::JoinHandle<()>>,
     artist: Option<tokio::task::JoinHandle<()>>,
     album: Option<tokio::task::JoinHandle<()>>,
+    shows: Option<tokio::task::JoinHandle<()>>,
+    show: Option<tokio::task::JoinHandle<()>>,
     /// Seeded by the first full reload; lets later reloads answer Unchanged
     /// from the head probes alone.
     library_fingerprint: SharedFingerprint,
@@ -2126,6 +2144,24 @@ impl CatalogFetches {
             respond,
             "Spotify album request",
             async move { spotify.album(&source_id).await },
+        );
+    }
+
+    fn saved_shows(&mut self, spotify: Spotify, respond: Reply<Vec<Show>>) {
+        Self::start(
+            &mut self.shows,
+            respond,
+            "Spotify saved-shows request",
+            async move { spotify.saved_shows().await },
+        );
+    }
+
+    fn show(&mut self, spotify: Spotify, source_id: String, respond: Reply<ShowDetails>) {
+        Self::start(
+            &mut self.show,
+            respond,
+            "Spotify show request",
+            async move { spotify.show(&source_id).await },
         );
     }
 
@@ -2722,7 +2758,7 @@ mod tests {
         BackendCommand, BackendEvent, BlockingStore, PlaybackConnection, build_radio_context,
         favorite_needs_catalog_refresh, send_command,
     };
-    use crate::model::{AlbumRef, ArtistRef, Provider, Track};
+    use crate::model::{AlbumRef, ArtistRef, MediaKind, Provider, Track};
     use crate::storage::Store;
 
     fn favorite() -> Track {
@@ -2738,6 +2774,8 @@ mod tests {
             album_ref: None,
             duration_ms: 180_000,
             artwork_url: None,
+            kind: MediaKind::Music,
+            release_date: None,
         }
     }
 

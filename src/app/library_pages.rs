@@ -1,5 +1,6 @@
 use super::*;
 
+use catalog::request;
 use page::PageEvent;
 
 /// One of the track collections the library keeps for the signed-in account.
@@ -194,6 +195,105 @@ impl Render for PlaylistsPage {
         components::page("playlists-page")
             .pt_3()
             .child(components::page_heading(palette, "Playlists", detail))
+            .child(content)
+    }
+}
+
+/// The listener's saved Spotify podcast shows, fetched on demand rather than
+/// through the library, which stays a music concern.
+pub(super) struct ShowsPage {
+    backend: BackendHandle,
+    shows: Arc<[model::Show]>,
+    loaded: bool,
+    error: Option<SharedString>,
+    loaded_at: Option<SystemTime>,
+    request: Option<gpui_kit::Task<()>>,
+    shows_list: Entity<track_list::ShowList>,
+    _shows_subscription: Subscription,
+}
+
+impl EventEmitter<PageEvent> for ShowsPage {}
+
+impl ShowsPage {
+    pub(super) fn new(backend: BackendHandle, cx: &mut Context<Self>) -> Self {
+        let shows_list = cx.new(|cx| track_list::ShowList::new(cx));
+        Self {
+            backend,
+            shows: Arc::default(),
+            loaded: false,
+            error: None,
+            loaded_at: None,
+            request: None,
+            _shows_subscription: page::forward(&shows_list, cx),
+            shows_list,
+        }
+    }
+
+    /// Loads the saved shows the first time the listener lands here, and
+    /// again when the cached copy has gone stale. A failure leaves the clock
+    /// unset, so the next visit retries.
+    pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
+        let loading = self.request.is_some();
+        if self.loaded && (loading || catalog_data_is_fresh(self.loaded_at)) {
+            return;
+        }
+        let reply = request(&self.backend, |respond| BackendCommand::LoadSavedShows {
+            respond,
+        });
+        self.request = Some(cx.spawn(async move |this, cx| {
+            let result = reply.await;
+            let _ = this.update(cx, |page, cx| {
+                page.request = None;
+                match result {
+                    Ok(shows) => {
+                        page.shows = shows.into();
+                        page.loaded = true;
+                        page.error = None;
+                        page.loaded_at = Some(SystemTime::now());
+                    }
+                    Err(error) => {
+                        if !page.loaded {
+                            page.loaded = true;
+                            page.error = Some(error.clone());
+                        }
+                        cx.emit(PageEvent::Failed(error));
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+}
+
+impl Render for ShowsPage {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = appearance::Appearance::palette(cx);
+        let content = if let Some(error) = self.error.as_deref().filter(|_| self.shows.is_empty()) {
+            components::empty_state(palette, format!("Unable to load shows: {error}"))
+                .into_any_element()
+        } else if !self.shows.is_empty() {
+            self.shows_list.update(cx, |list, cx| {
+                list.show("saved-shows", self.shows.clone(), cx)
+            });
+            self.shows_list.clone().into_any_element()
+        } else if self.request.is_some() {
+            components::empty_state(palette, "Loading shows…").into_any_element()
+        } else {
+            components::empty_state(
+                palette,
+                "No saved shows. Follow podcasts in Spotify to see them here.",
+            )
+            .into_any_element()
+        };
+
+        components::page("shows-page")
+            .pt_3()
+            .child(components::page_heading(
+                palette,
+                "Podcasts",
+                "Saved Spotify shows",
+            ))
             .child(content)
     }
 }

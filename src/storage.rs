@@ -685,6 +685,8 @@ mod tests {
             album_ref: None,
             duration_ms: 180_000,
             artwork_url: None,
+            kind: crate::model::MediaKind::Music,
+            release_date: None,
         }
     }
 

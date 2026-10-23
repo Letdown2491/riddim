@@ -379,3 +379,86 @@ impl Render for PlaylistList {
             )
     }
 }
+
+/// A virtualized rail of saved podcast shows.
+pub(super) struct ShowList {
+    /// Set by `show`, which always runs before the list is first painted.
+    id: Option<ElementId>,
+    shows: Arc<[model::Show]>,
+    image_cache: Entity<image_cache::BoundedImageCache>,
+}
+
+impl EventEmitter<PageEvent> for ShowList {}
+
+impl ShowList {
+    pub(super) fn new(cx: &mut App) -> Self {
+        Self {
+            id: None,
+            shows: Arc::default(),
+            image_cache: services::AppServices::image_cache(cx),
+        }
+    }
+
+    /// Shows `shows` under `id`, which pages vary per content so that a new
+    /// set starts back at the top. Same render-time contract as
+    /// [`TrackList::show`]: pass a stored `Arc` clone, not a fresh slice.
+    pub(super) fn show(
+        &mut self,
+        id: impl Into<ElementId>,
+        shows: Arc<[model::Show]>,
+        cx: &mut Context<Self>,
+    ) {
+        let id = Some(id.into());
+        if self.id == id && Arc::ptr_eq(&self.shows, &shows) {
+            return;
+        }
+        self.id = id;
+        self.shows = shows;
+        cx.notify();
+    }
+}
+
+impl Render for ShowList {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = appearance::Appearance::palette(cx);
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .rounded(tokens::PANEL_RADIUS)
+            .overflow_hidden()
+            .border_1()
+            .border_color(rgb(palette.border))
+            .child(
+                uniform_list(
+                    self.id
+                        .clone()
+                        .expect("show sets the id before first paint"),
+                    self.shows.len(),
+                    cx.processor(move |this, range: Range<usize>, _, cx| {
+                        let shows = this.shows.clone();
+                        range
+                            .filter_map(|index| {
+                                shows.get(index).cloned().map(|show| {
+                                    let selected = show.clone();
+                                    track_row::ShowRow::new(
+                                        index,
+                                        show,
+                                        palette,
+                                        this.image_cache.clone(),
+                                    )
+                                    .on_open(cx.listener(move |_, _, _, cx| {
+                                        cx.emit(PageEvent::OpenShow(selected.clone()));
+                                    }))
+                                    .into_any_element()
+                                })
+                            })
+                            .collect()
+                    }),
+                )
+                .flex_1()
+                .min_h_0(),
+            )
+    }
+}

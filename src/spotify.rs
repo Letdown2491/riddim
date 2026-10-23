@@ -7,9 +7,10 @@ use keyring::Entry;
 use rspotify::{
     AuthCodePkceSpotify, Config, Credentials, OAuth, Token,
     model::{
-        AlbumId, AlbumType, ArtistId, FullAlbum, FullArtist, FullTrack, Id, Image, Market,
-        PlayableItem, PlaylistId, SavedTrack, SearchResult, SearchType, SimplifiedAlbum,
-        SimplifiedArtist, SimplifiedPlaylist, SimplifiedTrack, TrackId,
+        AlbumId, AlbumType, ArtistId, FullAlbum, FullArtist, FullShow, FullTrack, Id, Image,
+        Market, Page, PlayableItem, PlaylistId, SavedTrack, SearchResult, SearchType, ShowId,
+        SimplifiedAlbum, SimplifiedArtist, SimplifiedEpisode, SimplifiedPlaylist, SimplifiedShow,
+        SimplifiedTrack, TrackId,
     },
     prelude::{BaseClient, OAuthClient},
     scopes,
@@ -21,7 +22,9 @@ use tokio::{
 
 use crate::{
     credential_worker,
-    model::{Album, AlbumRef, Artist, ArtistRef, Playlist, Provider, Track, UserProfile},
+    model::{
+        Album, AlbumRef, Artist, ArtistRef, MediaKind, Playlist, Provider, Show, Track, UserProfile,
+    },
     oauth_callback::receive_callback,
     oauth_page::{OAuthStep, success_page},
 };
@@ -597,6 +600,70 @@ impl Spotify {
         Ok((album_model, tracks))
     }
 
+    /// The listener's saved podcast shows. rspotify has no wrapper for this
+    /// endpoint, so the pages come through the authenticated GET helper.
+    pub async fn saved_shows(&self) -> Result<Vec<Show>> {
+        self.gated(async {
+            let mut shows = Vec::new();
+            let mut offset = 0u32;
+            loop {
+                let offset_string = offset.to_string();
+                let query = [("limit", "50"), ("offset", offset_string.as_str())]
+                    .into_iter()
+                    .collect::<std::collections::HashMap<&str, &str>>();
+                let body = self
+                    .client
+                    .api_get("https://api.spotify.com/v1/me/shows", &query)
+                    .await?;
+                let page: Page<rspotify::model::Show> = serde_json::from_str(&body)?;
+                let returned = page.items.len() as u32;
+                shows.extend(page.items.into_iter().filter_map(convert_saved_show));
+                offset += returned;
+                if returned == 0 || offset >= page.total {
+                    break;
+                }
+            }
+            Ok(shows)
+        })
+        .await
+    }
+
+    /// A podcast show with its playable episodes, newest first.
+    pub async fn show(&self, source_id: &str) -> Result<(Show, Vec<Track>)> {
+        let show_id = ShowId::from_id(source_id)?;
+        self.gated(self.show_request(show_id)).await
+    }
+
+    async fn show_request(&self, show_id: ShowId<'_>) -> Result<(Show, Vec<Track>)> {
+        let full = self.client.get_a_show(show_id.as_ref(), None).await?;
+        let show = convert_full_show(&full);
+        let mut episodes = Vec::new();
+        let mut offset = 0u32;
+        loop {
+            let page = self
+                .client
+                .get_shows_episodes_manual(show_id.as_ref(), None, Some(50), Some(offset))
+                .await?;
+            let returned = page.items.len() as u32;
+            episodes.extend(
+                page.items
+                    .into_iter()
+                    .filter(|episode| episode.is_playable)
+                    .map(|episode| convert_simplified_episode(episode, &show))
+                    .collect::<Result<Vec<_>>>()?,
+            );
+            offset += returned;
+            if returned == 0 || offset >= page.total {
+                break;
+            }
+        }
+        let episodes = episodes
+            .into_iter()
+            .filter(|track| track.is_displayable())
+            .collect();
+        Ok((show, episodes))
+    }
+
     /// Resolves URIs one track at a time; Spotify removed the batch tracks
     /// endpoint in March 2026. Lookups overlap a few at a time and a missing
     /// track is skipped. A 429 trips the gate and returns what
@@ -736,6 +803,8 @@ fn convert_track(track: FullTrack) -> Result<Track> {
         album_ref: Some(album_ref),
         duration_ms,
         artwork_url: artwork_url(&track.album.images),
+        kind: MediaKind::Music,
+        release_date: None,
     })
 }
 
@@ -760,6 +829,8 @@ fn convert_simplified_track(track: SimplifiedTrack, album: AlbumRef) -> Result<T
         album_ref: Some(album.clone()),
         duration_ms,
         artwork_url: album.artwork_url,
+        kind: MediaKind::Music,
+        release_date: None,
     })
 }
 
@@ -867,6 +938,68 @@ fn convert_playlist(playlist: SimplifiedPlaylist) -> Playlist {
         track_count: playlist.items.total,
         artwork_url: artwork_url(&playlist.images),
     }
+}
+
+fn convert_saved_show(saved: rspotify::model::Show) -> Option<Show> {
+    convert_simplified_show(saved.show)
+}
+
+#[allow(deprecated)]
+fn convert_simplified_show(show: SimplifiedShow) -> Option<Show> {
+    if show.name.trim().is_empty() {
+        return None;
+    }
+    Some(Show {
+        provider: Provider::Spotify,
+        source_id: show.id.id().to_owned(),
+        spotify_uri: Some(show.id.uri()),
+        name: show.name.trim().into(),
+        publisher: show.publisher.trim().into(),
+        description: show.description.trim().into(),
+        artwork_url: artwork_url(&show.images),
+    })
+}
+
+#[allow(deprecated)]
+fn convert_full_show(show: &FullShow) -> Show {
+    Show {
+        provider: Provider::Spotify,
+        source_id: show.id.id().to_owned(),
+        spotify_uri: Some(show.id.uri()),
+        name: show.name.trim().into(),
+        publisher: show.publisher.trim().into(),
+        description: show.description.trim().into(),
+        artwork_url: artwork_url(&show.images),
+    }
+}
+
+/// Podcast episodes ride the music pipeline: a show's publisher stands in for
+/// the artist and the show for the album, with the kind marking the row as an
+/// episode. Spotify reports `is_playable` per market, which callers filter on
+/// before converting.
+fn convert_simplified_episode(episode: SimplifiedEpisode, show: &Show) -> Result<Track> {
+    let duration_ms = u32::try_from(episode.duration.num_milliseconds())
+        .context("Spotify returned an invalid episode duration")?;
+    let publisher = if show.publisher.trim().is_empty() {
+        show.name.clone()
+    } else {
+        show.publisher.clone()
+    };
+    Ok(Track {
+        provider: Provider::Spotify,
+        source_id: episode.id.id().to_owned(),
+        spotify_uri: Some(episode.id.uri()),
+        isrc: None,
+        title: episode.name.into(),
+        artist: publisher,
+        artists: Vec::new(),
+        album: show.name.clone(),
+        album_ref: None,
+        duration_ms,
+        artwork_url: artwork_url(&episode.images),
+        kind: MediaKind::Episode,
+        release_date: Some(episode.release_date),
+    })
 }
 
 struct TokenVault;

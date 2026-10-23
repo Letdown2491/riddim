@@ -13,6 +13,7 @@ pub(super) enum PageEvent {
     OpenPlaylist(model::Playlist),
     OpenArtist(model::ArtistRef),
     OpenAlbum(model::AlbumRef),
+    OpenShow(model::Show),
     StartRadio(model::Track),
 }
 

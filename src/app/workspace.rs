@@ -19,10 +19,12 @@ pub(super) struct Workspace {
     pub(super) favorites: Entity<library_pages::LibraryTracksPage>,
     pub(super) recent: Entity<library_pages::LibraryTracksPage>,
     pub(super) playlists: Entity<library_pages::PlaylistsPage>,
+    pub(super) shows: Entity<library_pages::ShowsPage>,
     pub(super) search: Entity<catalog::SearchPage>,
     pub(super) playlist: Entity<catalog::PlaylistPage>,
     pub(super) artist: Entity<catalog::ArtistPage>,
     pub(super) album: Entity<catalog::AlbumPage>,
+    pub(super) show: Entity<catalog::ShowPage>,
     pub(super) settings: Entity<settings::Settings>,
     pub(super) sidebar: Entity<sidebar::Sidebar>,
     pub(super) toolbar: Entity<chrome::Toolbar>,
@@ -81,19 +83,23 @@ impl Workspace {
         let favorites = library_page(LibrarySection::Favorites, cx);
         let recent = library_page(LibrarySection::Recent, cx);
         let playlists = cx.new(library_pages::PlaylistsPage::new);
+        let shows = cx.new(|cx| library_pages::ShowsPage::new(backend.clone(), cx));
         let search = cx.new(|cx| catalog::SearchPage::new(backend.clone(), cx));
         let playlist = cx.new(|cx| catalog::PlaylistPage::new(backend.clone(), cx));
         let artist = cx.new(|cx| catalog::ArtistPage::new(backend.clone(), cx));
         let album = cx.new(|cx| catalog::AlbumPage::new(backend.clone(), cx));
+        let show = cx.new(|cx| catalog::ShowPage::new(backend.clone(), cx));
         subscriptions.extend([
             cx.subscribe(&liked_songs, Workspace::handle_page_event),
             cx.subscribe(&favorites, Workspace::handle_page_event),
             cx.subscribe(&recent, Workspace::handle_page_event),
             cx.subscribe(&playlists, Workspace::handle_page_event),
+            cx.subscribe(&shows, Workspace::handle_page_event),
             cx.subscribe(&search, Workspace::handle_page_event),
             cx.subscribe(&playlist, Workspace::handle_page_event),
             cx.subscribe(&artist, Workspace::handle_page_event),
             cx.subscribe(&album, Workspace::handle_page_event),
+            cx.subscribe(&show, Workspace::handle_page_event),
         ]);
         let settings = cx.new(|cx| settings::Settings::new(window, cx));
         subscriptions.push(cx.subscribe_in(
@@ -199,10 +205,12 @@ impl Workspace {
             favorites,
             recent,
             playlists,
+            shows,
             search,
             playlist,
             artist,
             album,
+            show,
             settings,
             sidebar,
             toolbar,
@@ -246,6 +254,8 @@ impl Workspace {
             Route::Playlist => self.playlist.clone().into_any_element(),
             Route::Artist => self.artist.clone().into_any_element(),
             Route::Album => self.album.clone().into_any_element(),
+            Route::Shows => self.shows.clone().into_any_element(),
+            Route::Show => self.show.clone().into_any_element(),
             Route::Settings => self.settings.clone().into_any_element(),
         }
     }
