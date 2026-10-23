@@ -1,0 +1,60 @@
+[package]
+name = "cadence"
+version = "0.7.2"
+edition = "2024"
+rust-version = "1.97"
+
+[dependencies]
+anyhow = "1.0"
+async-channel = "2.5"
+base64 = "0.22"
+cpal = "0.18"
+directories = "6.0"
+env_logger = "0.11"
+futures = "0.3"
+gpui-kit = "0.7.0"
+keyring = "4.1"
+librespot = { version = "0.8.0", default-features = false, features = ["native-tls"] }
+objc = "0.2"
+raw-window-handle = "0.6"
+oauth2 = { version = "5.0", default-features = false, features = ["reqwest", "native-tls"] }
+oauth2-reqwest = { package = "reqwest", version = "0.12", default-features = false, features = ["native-tls"] }
+open = "5.3"
+rspotify = { version = "0.16.0", default-features = false, features = ["client-reqwest", "reqwest-native-tls"] }
+# gpui-kit's HTTP client is built on this reqwest fork; sharing it keeps one build.
+reqwest = { package = "gpui-pre-reqwest", version = "0.12.15", default-features = false, features = ["rustls-tls", "stream"] }
+ringbuf = "0.5"
+rubato = "5"
+rust-embed = "8"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.53", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+url = "2.5"
+souvlaki = { version = "0.8.3", default-features = false }
+log = "0.4.33"
+
+[build-dependencies]
+# librespot 0.8's build script is incompatible with vergen 9.1.
+vergen = "=9.0.6"
+
+[dev-dependencies]
+gpui-kit = { version = "0.7.0", features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[test]]
+name = "ui_rendering"
+path = "src/ui_rendering.rs"
+harness = false
+test = false
+
+[profile.dev]
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"

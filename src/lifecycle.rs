@@ -1,0 +1,228 @@
+use std::{
+    fs,
+    io::{self, Read, Write},
+    os::unix::net::{UnixListener, UnixStream},
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
+    time::Duration,
+};
+
+use anyhow::{Context as _, Result};
+use directories::ProjectDirs;
+
+const ACTIVATE_MESSAGE: &[u8] = b"activate\n";
+const ACTIVATE_ACKNOWLEDGMENT: &[u8] = b"ok\n";
+const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(250);
+
+pub enum Instance {
+    Primary(Arc<InstanceLifecycle>),
+    Secondary,
+}
+
+pub struct InstanceLifecycle {
+    socket_path: PathBuf,
+    activations: async_channel::Receiver<()>,
+    shutdown: Arc<AtomicBool>,
+    listener_thread: Option<JoinHandle<()>>,
+}
+
+impl InstanceLifecycle {
+    #[cfg(test)]
+    pub(crate) fn isolated() -> Arc<Self> {
+        let (_, activations) = async_channel::bounded(1);
+        Arc::new(Self {
+            socket_path: PathBuf::new(),
+            activations,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            listener_thread: None,
+        })
+    }
+
+    pub fn acquire() -> Result<Instance> {
+        let project_dirs = ProjectDirs::from("dev", "twoducks", "cadence")
+            .context("could not determine the Cadence cache directory")?;
+        Self::acquire_at(project_dirs.cache_dir().join("activation.sock"))
+    }
+
+    fn acquire_at(socket_path: PathBuf) -> Result<Instance> {
+        if let Some(parent) = socket_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("could not create lifecycle directory {}", parent.display())
+            })?;
+        }
+
+        match UnixListener::bind(&socket_path) {
+            Ok(listener) => Self::start_primary(socket_path, listener),
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+                if Self::request_activation(&socket_path).is_ok() {
+                    return Ok(Instance::Secondary);
+                }
+
+                // A crashed process can leave its socket path behind.
+                let _ = fs::remove_file(&socket_path);
+                let listener = UnixListener::bind(&socket_path).with_context(|| {
+                    format!(
+                        "could not recover lifecycle socket {}",
+                        socket_path.display()
+                    )
+                })?;
+                Self::start_primary(socket_path, listener)
+            }
+            Err(error) => Err(error).with_context(|| {
+                format!("could not bind lifecycle socket {}", socket_path.display())
+            }),
+        }
+    }
+
+    fn start_primary(socket_path: PathBuf, listener: UnixListener) -> Result<Instance> {
+        listener
+            .set_nonblocking(true)
+            .context("could not configure lifecycle socket")?;
+        let (activation_tx, activation_rx) = async_channel::bounded(1);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let listener_shutdown = shutdown.clone();
+        let listener_thread = thread::Builder::new()
+            .name("cadence-activation".into())
+            .spawn(move || {
+                while !listener_shutdown.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            if listener_shutdown.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            let _ = stream.set_read_timeout(Some(ACTIVATION_TIMEOUT));
+                            let _ = stream.set_write_timeout(Some(ACTIVATION_TIMEOUT));
+                            let mut message = [0; ACTIVATE_MESSAGE.len()];
+                            if stream.read_exact(&mut message).is_ok()
+                                && message == ACTIVATE_MESSAGE
+                                && stream.write_all(ACTIVATE_ACKNOWLEDGMENT).is_ok()
+                            {
+                                let _ = activation_tx.try_send(());
+                            }
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(50));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+            .context("could not start lifecycle listener")?;
+
+        Ok(Instance::Primary(Arc::new(Self {
+            socket_path,
+            activations: activation_rx,
+            shutdown,
+            listener_thread: Some(listener_thread),
+        })))
+    }
+
+    fn request_activation(socket_path: &Path) -> io::Result<()> {
+        let mut stream = UnixStream::connect(socket_path)?;
+        stream.set_read_timeout(Some(ACTIVATION_TIMEOUT))?;
+        stream.set_write_timeout(Some(ACTIVATION_TIMEOUT))?;
+        stream.write_all(ACTIVATE_MESSAGE)?;
+        let mut acknowledgment = [0; ACTIVATE_ACKNOWLEDGMENT.len()];
+        stream.read_exact(&mut acknowledgment)?;
+        if acknowledgment == ACTIVATE_ACKNOWLEDGMENT {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid activation acknowledgment",
+            ))
+        }
+    }
+
+    pub fn take_activation(&self) -> bool {
+        let mut activated = false;
+        while self.activations.try_recv().is_ok() {
+            activated = true;
+        }
+        activated
+    }
+
+    pub fn activation_receiver(&self) -> async_channel::Receiver<()> {
+        self.activations.clone()
+    }
+}
+
+impl Drop for InstanceLifecycle {
+    fn drop(&mut self) {
+        if self.listener_thread.is_none() {
+            return;
+        }
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = UnixStream::connect(&self.socket_path);
+        if let Some(listener_thread) = self.listener_thread.take() {
+            let _ = listener_thread.join();
+        }
+        let _ = fs::remove_file(&self.socket_path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Instance, InstanceLifecycle};
+    use std::{fs, time::Duration};
+
+    fn socket_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "cadence-lifecycle-{}-{name}.sock",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn second_instance_activates_primary() {
+        let path = socket_path("activate");
+        let _ = fs::remove_file(&path);
+        let Instance::Primary(primary) =
+            InstanceLifecycle::acquire_at(path.clone()).expect("primary should start")
+        else {
+            panic!("first instance was not primary");
+        };
+
+        assert!(matches!(
+            InstanceLifecycle::acquire_at(path),
+            Ok(Instance::Secondary)
+        ));
+        for _ in 0..20 {
+            if primary.take_activation() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("primary did not receive activation");
+    }
+
+    #[test]
+    fn stale_socket_is_recovered() {
+        let path = socket_path("stale");
+        let _ = fs::remove_file(&path);
+        std::os::unix::net::UnixListener::bind(&path).expect("stale socket should bind");
+
+        assert!(matches!(
+            InstanceLifecycle::acquire_at(path),
+            Ok(Instance::Primary(_))
+        ));
+    }
+
+    #[test]
+    fn primary_stops_if_its_socket_path_was_removed() {
+        let path = socket_path("removed");
+        let _ = fs::remove_file(&path);
+        let Instance::Primary(primary) =
+            InstanceLifecycle::acquire_at(path.clone()).expect("primary should start")
+        else {
+            panic!("first instance was not primary");
+        };
+
+        fs::remove_file(path).expect("socket path should be removable");
+        drop(primary);
+    }
+}

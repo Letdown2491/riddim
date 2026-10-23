@@ -1,0 +1,13 @@
+/target
+/dist
+/.cache
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+
+# Local tooling artifacts
+.beads.gate.lock
+.playwright-mcp/

@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: macos-15
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo fmt --all --check
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - name: Native visual regression checks
+        id: native
+        run: |
+          sw_vers > target/ui-environment.txt
+          uname -m >> target/ui-environment.txt
+          system_profiler SPDisplaysDataType >> target/ui-environment.txt
+          cargo test --test ui_rendering --locked
+      - uses: actions/upload-artifact@v7
+        if: failure() && steps.native.outcome == 'failure'
+        with:
+          name: native-visual-regressions
+          path: |
+            target/ui-artifacts/
+            target/ui-environment.txt
+            tests/visual/baseline/manifest.json
+            Cargo.lock
+          retention-days: 14
+
+  web:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo fmt --manifest-path web/Cargo.toml -- --check
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked --manifest-path web/Cargo.toml
+      - run: cargo clippy --all-targets --locked --manifest-path web/Cargo.toml -- -D warnings
+      - run: cargo test --locked --manifest-path web/Cargo.toml
+      - name: Assets stay in sync
+        run: |
+          cmp assets/cadence-mark.svg web/static/cadence-mark.svg
+          cmp assets/cadence.webp web/static/cadence.webp
+      - name: Docker smoke test
+        run: |
+          docker build -t cadence-web:ci web/
+          docker run -d --name cadence-web-ci -p 3000:3000 cadence-web:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/healthz; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:3000/ >/dev/null
+          curl -fsS http://localhost:3000/releases >/dev/null
+          docker rm -f cadence-web-ci

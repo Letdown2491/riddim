@@ -1,0 +1,85 @@
+<p align="center">
+  <img src="assets/cadence-mark.svg" width="96" height="96" alt="Cadence logo">
+</p>
+
+<h1 align="center">Cadence</h1>
+
+<p align="center">
+  A minimal Spotify player for macOS.<br>
+  Native, responsive, and typically uses around 120 MB of RAM.
+</p>
+
+<p align="center">
+  <a href="https://github.com/infomiho/cadence/actions/workflows/ci.yml"><img src="https://github.com/infomiho/cadence/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-black.svg" alt="MIT license"></a>
+</p>
+
+![Cadence showing the Liked Songs library](assets/cadence.webp)
+
+## Features
+
+- Search tracks and playlists
+- Play music locally with queue, history, favorites, and radio
+- Browse native artist and album pages
+- Pin playlists to the sidebar
+- Now Playing and media key controls
+- Light, dark, and system appearances
+- Optional pixel-art player mascot
+- Persistent playback and library state
+
+## Built With
+
+**Rust** + **GPUI** + **librespot** + **rspotify** + **SQLite** + **CPAL**
+
+GPUI renders the native GPU-accelerated interface, librespot handles playback
+through CPAL, rspotify connects to the Spotify Web API, and SQLite keeps local state.
+
+## Install
+
+1. Download the latest DMG from [Releases](https://github.com/infomiho/cadence/releases/latest).
+2. Open the DMG and drag Cadence into Applications.
+3. Launch Cadence from Applications and follow the Spotify setup below.
+
+Release downloads are signed with Developer ID and notarized by Apple.
+
+## Set Up Spotify
+
+Cadence requires macOS and Spotify Premium. On first launch, Cadence guides you
+through creating a Spotify developer app and entering its Client ID. Client IDs
+are public; Cadence never needs your client secret.
+
+1. Create an app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
+2. Add `http://127.0.0.1:8888/callback` as a redirect URI.
+3. Copy the Client ID from **Basic Information** and enter it in Cadence.
+
+Cadence stores the Client ID in app preferences and keeps login and playback
+tokens in macOS Keychain.
+
+## Run From Source
+
+Building Cadence requires Rust and Apple's Metal Toolchain. Developers can skip
+the setup screen by setting `SPOTIFY_CLIENT_ID` at launch:
+
+```sh
+SPOTIFY_CLIENT_ID="your-client-id" cargo run
+```
+
+For a stable local signature and fewer Keychain prompts during development:
+
+```sh
+SPOTIFY_CLIENT_ID="your-client-id" ./scripts/run-signed.sh
+```
+
+## Releases
+
+Version tags publish a signed and notarized DMG with a SHA-256 checksum on the
+[releases page](https://github.com/infomiho/cadence/releases). Maintainers set
+up the signing secrets once with `scripts/setup-release-signing.sh`.
+
+Release builds do not include a shared Spotify Client ID. Each person configures
+their own Spotify developer app on first launch. The logo attribution is in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+## License
+
+[MIT](LICENSE)
