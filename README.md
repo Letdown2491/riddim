@@ -36,22 +36,26 @@ through CPAL, rspotify connects to the Spotify Web API, and SQLite keeps local s
 ## Requirements
 
 Linux with Spotify Premium. Playback goes through ALSA, which PipeWire and
-PulseAudio servers provide. The Secret Service (GNOME Keyring, KWallet, or
-similar) stores Spotify credentials; without one, login falls back to asking
-each session. A Vulkan driver renders the interface.
+PulseAudio servers provide. A desktop keyring (GNOME Keyring, KWallet, or
+another Secret Service provider) stores Spotify credentials. A Vulkan driver
+renders the interface.
 
 ## Set Up Spotify
 
-On first launch, Riddim guides you through creating a Spotify developer app
+On first launch, Riddim walks you through creating a Spotify developer app
 and entering its Client ID. Client IDs are public; Riddim never needs your
 client secret.
 
-1. Create an app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
-2. Add `http://127.0.0.1:8888/callback` as a redirect URI.
-3. Copy the Client ID from **Basic Information** and enter it in Riddim.
+Spotify then asks you to approve Riddim twice in the browser — first for
+your library (under your developer app, redirecting to
+`http://127.0.0.1:8888/callback`), then for playback (under Riddim's
+built-in player identity, redirecting to `http://127.0.0.1:8898/login`).
+Both redirects are local callback servers Riddim runs momentarily; nothing
+is served to the network.
 
-Riddim stores the Client ID in app preferences and keeps login and playback
-tokens in the Secret Service.
+The full walkthrough, including what to do when the browser does not open,
+Spotify rejects a redirect, or no keyring is running, is in
+[`docs/spotify-setup.md`](docs/spotify-setup.md).
 
 ## Run From Source
 
