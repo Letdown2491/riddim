@@ -3,7 +3,7 @@
     "riddim": "0.1.0",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "829b39d5cef7c6010f6656aae43ff8e89c5e6b00",
+    "revision": "55f26c1505b810df72530f5efe134e1bc2a570f1",
     "lockfile_sha256": "ef09de2f53342dff2fd598ae21e866fc8d8b14d234339a4ed0cd6cb12ff89857"
   },
   "platform": {
@@ -27,7 +27,7 @@
     "light",
     "dark"
   ],
-  "artwork": "embedded brand and local placeholders",
+  "artwork": "riddim's own redrawn icons and mark; local placeholders",
   "playback": "paused at 60000 ms",
   "fonts": {
     "Inter-Bold.ttf": "790c108befe859dac2ddbd20af3fbb6917c601b3d544c8a05761519f3b5508fe",
@@ -37,7 +37,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "recorded locally in the riddim-dev container (no hosted capture)",
+  "capture_run": "recorded locally in the riddim-dev container (no hosted capture) after redrawing all icons and the mark as original artwork",
   "matching_run": "same capture, repeatable render verified twice per scene",
   "rust": "1.97.1",
   "keyboard_focus_details": {
@@ -57,7 +57,7 @@
       "gpu": "none (software rasterization)"
     },
     "source": {
-      "base_revision": "a1e13cb404b6f5d206e34868597a1b4daa9d5757",
+      "base_revision": "55f26c1505b810df72530f5efe134e1bc2a570f1",
       "files_sha256": {
         "src/app/player_bar.rs": "50b67c2eb385559e0aa2da9c33c429ac3b17f3a70992d47ecd9593c00b3a8ab5",
         "src/app/bootstrap.rs": "abb371ac45ecdd679211f21c5f44972ebe98fc82d0d74c0d00ef2ce42169461f",

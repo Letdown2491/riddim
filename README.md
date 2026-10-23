@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/cadence-mark.svg" width="96" height="96" alt="Riddim logo">
+  <img src="assets/riddim-mark.svg" width="96" height="96" alt="Riddim logo">
 </p>
 
 <h1 align="center">Riddim</h1>
@@ -86,8 +86,7 @@ riddim
 
 Riddim is a Linux port of [Cadence](https://github.com/infomiho/cadence) by
 Miho, a Spotify player for macOS. Same engine, same design; the platform
-plumbing differs. The mark adapts the `audio-waveform` icon from Vadivam, with
-attribution in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+plumbing differs. The mark and interface icons are riddim's own artwork.
 
 ## License
 

@@ -1,6 +1,6 @@
-//! The app's icon set: Solar glyphs bundled under `assets/icons/riddim`,
-//! drawn through gpui-kit's `Icon` so they take the text colour and size of
-//! wherever they sit.
+//! The app's own icon set, bundled under `assets/icons/riddim`, drawn through
+//! gpui-kit's `Icon` so they take the text colour and size of wherever they
+//! sit.
 
 use gpui_kit::{SharedString, component::IconNamed};
 
