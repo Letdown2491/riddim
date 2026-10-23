@@ -122,7 +122,12 @@ impl Session {
         cx.notify();
     }
 
-    pub(super) fn configure(&mut self, client_id: String, cx: &mut Context<Self>) -> bool {
+    pub(super) fn configure(
+        &mut self,
+        client_id: String,
+        soloist_api_key: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
         self.setup_error = None;
         self.last_failure = None;
         self.state = ConnectionState::Connecting;
@@ -132,6 +137,7 @@ impl Session {
             BackendCommand::ConfigureSpotify {
                 generation,
                 client_id,
+                soloist_api_key,
             },
             cx,
         );

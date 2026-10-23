@@ -10,12 +10,11 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use librespot::{core::SpotifyUri, playback::player::PlayerEvent};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 use crate::{
     model::{Album, Artist, CachedLibrary, LibraryFingerprint, Playlist, Show, Track, UserProfile},
-    playback::{Playback, PlaybackAuthorization, delete_playback_refresh_token},
+    playback::{Playback, PlaybackEvent, delete_soloist_api_key, save_soloist_api_key},
     spotify::{
         ClientIdSource, Spotify, SpotifyConfiguration, resolve_configuration, valid_client_id,
     },
@@ -31,10 +30,9 @@ struct AuthorizationSuccess {
     playback: Option<PlaybackConnectionRequest>,
 }
 
-struct PlaybackConnectionRequest {
-    load_saved_token: bool,
-    authorization: Option<PlaybackAuthorization>,
-}
+/// Playback needs no sign-in parameters anymore: the Soloist daemon reads its
+/// API key from the keychain and its pairing from the data directory.
+struct PlaybackConnectionRequest;
 
 #[derive(Clone)]
 struct BlockingStore {
@@ -270,6 +268,9 @@ pub enum BackendCommand {
     ConfigureSpotify {
         generation: u64,
         client_id: String,
+        /// The Soloist API key for playback, stored in the keychain by the
+        /// backend before any browser authorization starts.
+        soloist_api_key: String,
     },
     ResetSpotifyConfiguration {
         generation: u64,
@@ -647,7 +648,6 @@ struct Startup {
     spotify: Spotify,
     configuration: Option<SpotifyConfiguration>,
     playback_snapshot: Option<PlaybackSnapshot>,
-    playback_credentials_invalidated: bool,
 }
 
 /// The error carries the shutdown acknowledgment when the app quit before
@@ -696,16 +696,6 @@ async fn start(
     };
     let oauth_credentials_invalidated = match store
         .call(|store| store.spotify_oauth_credentials_invalidated())
-        .await
-    {
-        Ok(invalidated) => invalidated,
-        Err(error) => {
-            send_fatal_error(events, error);
-            return Err(None);
-        }
-    };
-    let mut playback_credentials_invalidated = match store
-        .call(|store| store.spotify_playback_credentials_invalidated())
         .await
     {
         Ok(invalidated) => invalidated,
@@ -781,6 +771,7 @@ async fn start(
             BackendCommand::ConfigureSpotify {
                 generation,
                 client_id,
+                soloist_api_key,
             } if valid_client_id(&client_id) => {
                 let client_id = client_id.trim().to_owned();
                 let candidate = tokio::select! {
@@ -804,12 +795,18 @@ async fn start(
                     });
                     continue;
                 }
+                if let Err(error) = save_soloist_api_key(soloist_api_key).await {
+                    let _ = events.send(BackendEvent::SpotifyConfigurationFailed {
+                        generation,
+                        error: error.to_string(),
+                    });
+                    continue;
+                }
                 configuration = Some(SpotifyConfiguration {
                     client_id,
                     source: ClientIdSource::Saved,
                 });
                 configuration_generation = generation;
-                playback_credentials_invalidated = true;
                 break candidate;
             }
             BackendCommand::ConfigureSpotify { generation, .. } => {
@@ -835,7 +832,6 @@ async fn start(
         spotify,
         configuration,
         playback_snapshot,
-        playback_credentials_invalidated,
     })
 }
 
@@ -925,7 +921,6 @@ struct Worker {
     store: BlockingStore,
     spotify: Spotify,
     configuration: Option<SpotifyConfiguration>,
-    playback_credentials_invalidated: bool,
     account_generation: u64,
     catalog_generation: Arc<AtomicU64>,
     queue: PlayQueue,
@@ -944,7 +939,6 @@ impl Worker {
             store: startup.store,
             spotify: startup.spotify,
             configuration: startup.configuration,
-            playback_credentials_invalidated: startup.playback_credentials_invalidated,
             account_generation: 0,
             catalog_generation: Arc::new(AtomicU64::new(0)),
             queue: PlayQueue::from_snapshot(startup.playback_snapshot),
@@ -983,10 +977,7 @@ impl Worker {
         log::info!("startup: account authorized");
         self.serve_cached_library().await;
         self.start_account_loads().await;
-        self.connection.begin_connect(PlaybackConnectionRequest {
-            load_saved_token: true,
-            authorization: None,
-        });
+        self.connection.begin_connect(PlaybackConnectionRequest);
         Ok(())
     }
 
@@ -1044,8 +1035,9 @@ impl Worker {
             BackendCommand::ConfigureSpotify {
                 generation,
                 client_id,
+                soloist_api_key,
             } => {
-                self.configure_spotify(generation, client_id, shutdown)
+                self.configure_spotify(generation, client_id, soloist_api_key, shutdown)
                     .await
             }
             BackendCommand::Authenticate { generation } => {
@@ -1087,13 +1079,8 @@ impl Worker {
                 Ok(())
             }
             BackendCommand::StartRadio { request_id, seed } => {
-                self.radio.start(
-                    request_id,
-                    seed,
-                    self.connection.player.clone(),
-                    self.spotify.clone(),
-                    &self.events,
-                );
+                self.radio
+                    .start(request_id, seed, self.spotify.clone(), &self.events);
                 Ok(())
             }
             BackendCommand::PlayContext { tracks, index } => self.play_context(tracks, index).await,
@@ -1155,12 +1142,11 @@ impl Worker {
         }
         self.abort_account_work();
         self.stop_playback_session();
-        self.playback_credentials_invalidated = true;
         self.configuration = None;
         if let Err(error) = self.spotify.logout().await {
             send_error(&self.events, error);
         }
-        if let Err(error) = delete_playback_refresh_token().await {
+        if let Err(error) = delete_soloist_api_key().await {
             send_error(&self.events, error);
         }
         if let Err(error) = self.store.clear_library_cache().await {
@@ -1178,6 +1164,7 @@ impl Worker {
         &mut self,
         generation: u64,
         client_id: String,
+        soloist_api_key: String,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         abort_task(&mut self.session.authorization);
@@ -1219,8 +1206,13 @@ impl Worker {
             self.send_configuration_failed(generation, error);
             return Ok(());
         }
+        // Store the playback key before the browser dance: playback connects
+        // the moment authorization settles, and the daemon reads it at spawn.
+        if let Err(error) = save_soloist_api_key(soloist_api_key).await {
+            self.send_configuration_failed(generation, error);
+            return Ok(());
+        }
         self.spotify = candidate;
-        self.playback_credentials_invalidated = true;
         self.configuration = Some(SpotifyConfiguration {
             client_id: client_id.clone(),
             source: ClientIdSource::Saved,
@@ -1241,12 +1233,8 @@ impl Worker {
             .player
             .as_ref()
             .is_none_or(|player| !player.is_connected());
-        self.session.begin_authorization(
-            generation,
-            self.spotify.clone(),
-            needs_playback,
-            self.playback_credentials_invalidated,
-        );
+        self.session
+            .begin_authorization(generation, self.spotify.clone(), needs_playback);
     }
 
     fn logout(&mut self, generation: u64) {
@@ -1255,7 +1243,6 @@ impl Worker {
         self.catalog_generation.store(generation, Ordering::Release);
         self.abort_account_work();
         self.stop_playback_session();
-        self.playback_credentials_invalidated = true;
         self.session
             .begin_logout(self.store.clone(), self.spotify.clone());
     }
@@ -1584,7 +1571,6 @@ impl Worker {
             Some(Ok(Ok(player))) => {
                 log::info!("playback: connected");
                 self.connection.adopt(player, &self.events);
-                self.playback_credentials_invalidated = false;
                 if let Err(error) = self.store.set_playback_credentials_invalidated(false).await {
                     send_error(&self.events, error);
                 }
@@ -1778,7 +1764,6 @@ impl Worker {
         // has moved away from; its result must never touch this queue.
         abort_task(&mut self.autoplay.task);
         self.autoplay.seed_id = Some(seed.source_id.clone());
-        let player = self.connection.player.clone();
         let spotify = self.spotify.clone();
         let store = self.store.clone();
         self.autoplay.task = Some(tokio::spawn(async move {
@@ -1786,12 +1771,11 @@ impl Worker {
                 return Ok(None);
             }
             run_with_timeout(60, "Spotify autoplay radio", async {
-                let player = player.context("Spotify playback is not connected")?;
                 let seed_uri = seed
                     .spotify_uri
                     .as_deref()
                     .context("autoplay seed has no Spotify track URI")?;
-                let uris = player.radio_track_uris(seed_uri).await?;
+                let uris = spotify.radio_track_uris(seed_uri).await?;
                 spotify.resolve_playable_track_uris(&uris).await.map(Some)
             })
             .await
@@ -1932,17 +1916,10 @@ struct SessionTasks {
 }
 
 impl SessionTasks {
-    fn begin_authorization(
-        &mut self,
-        generation: u64,
-        spotify: Spotify,
-        needs_playback: bool,
-        playback_credentials_invalidated: bool,
-    ) {
+    fn begin_authorization(&mut self, generation: u64, spotify: Spotify, needs_playback: bool) {
         abort_task(&mut self.authorization);
         self.authorization = Some(tokio::spawn(async move {
-            let result =
-                authorize_account(spotify, needs_playback, playback_credentials_invalidated).await;
+            let result = authorize_account(spotify, needs_playback).await;
             (generation, result)
         }));
     }
@@ -2031,7 +2008,6 @@ impl Radio {
         &mut self,
         request_id: u64,
         seed: Track,
-        player: Option<Playback>,
         spotify: Spotify,
         events: &UnboundedSender<BackendEvent>,
     ) {
@@ -2039,12 +2015,11 @@ impl Radio {
         self.request_id = Some(request_id);
         self.task = Some(tokio::spawn(async move {
             let result = tokio::time::timeout(Duration::from_secs(20), async {
-                let player = player.context("Spotify playback is not connected")?;
                 let seed_uri = seed
                     .spotify_uri
                     .as_deref()
                     .context("radio seed has no Spotify track URI")?;
-                let uris = player.radio_track_uris(seed_uri).await?;
+                let uris = spotify.radio_track_uris(seed_uri).await?;
                 let recommendations = spotify.resolve_playable_track_uris(&uris).await?;
                 build_radio_context(seed, recommendations)
             })
@@ -2256,15 +2231,12 @@ impl PlaybackConnection {
     }
 
     /// Replaces the current session with a fresh connection attempt.
-    fn begin_connect(&mut self, request: PlaybackConnectionRequest) {
+    fn begin_connect(&mut self, _request: PlaybackConnectionRequest) {
         self.connect_restoring = self.reconnect_pending;
         self.abort_attempts();
         self.reconnect_pending = false;
         self.disconnect();
-        self.connect = Some(tokio::spawn(Playback::connect(
-            request.load_saved_token,
-            request.authorization,
-        )));
+        self.connect = Some(tokio::spawn(Playback::connect()));
     }
 
     /// Starts a reconnect attempt when the session dropped, unless one is
@@ -2513,27 +2485,9 @@ async fn persist_library_cache(
 async fn authorize_account(
     mut spotify: Spotify,
     needs_playback: bool,
-    playback_credentials_invalidated: bool,
 ) -> Result<AuthorizationSuccess> {
-    let playback_authorization = if needs_playback && playback_credentials_invalidated {
-        Some(Playback::prepare_authorization().await?)
-    } else {
-        None
-    };
-    let playback_authorization_url = playback_authorization
-        .as_ref()
-        .map(|authorization| authorization.url().to_owned());
-    spotify
-        .authorize(playback_authorization_url.as_deref())
-        .await?;
-    let playback = if needs_playback {
-        Some(PlaybackConnectionRequest {
-            load_saved_token: !playback_credentials_invalidated,
-            authorization: playback_authorization,
-        })
-    } else {
-        None
-    };
+    spotify.authorize().await?;
+    let playback = needs_playback.then_some(PlaybackConnectionRequest);
     Ok(AuthorizationSuccess { playback })
 }
 
@@ -2543,7 +2497,8 @@ async fn logout_account(store: BlockingStore, spotify: Spotify) -> Result<()> {
         store.set_oauth_credentials_invalidated(true).await,
         store.set_playback_credentials_invalidated(true).await,
         spotify.logout().await,
-        delete_playback_refresh_token().await,
+        delete_soloist_api_key().await,
+        crate::soloist::clear_daemon_data(),
         store.clear_library_cache().await,
         store.clear_playback_state().await,
     ] {
@@ -2562,66 +2517,47 @@ fn observe_playback(
     player: &Playback,
     events: &UnboundedSender<BackendEvent>,
 ) -> tokio::task::JoinHandle<()> {
-    let mut player_events = player.events();
+    let Some(mut player_events) = player.events() else {
+        log::error!("playback: the event stream was already taken");
+        return tokio::spawn(async {});
+    };
     let event_sender = events.clone();
     tokio::spawn(async move {
         while let Some(event) = player_events.recv().await {
             let event = match event {
-                PlayerEvent::Loading { track_id, .. } => Some(BackendEvent::Loading {
-                    spotify_uri: track_id.to_string(),
-                }),
-                PlayerEvent::Playing {
-                    track_id,
+                PlaybackEvent::Loading { spotify_uri } => {
+                    Some(BackendEvent::Loading { spotify_uri })
+                }
+                PlaybackEvent::Playing {
+                    spotify_uri,
                     position_ms,
-                    ..
                 } => {
                     let _ = event_sender.send(BackendEvent::PositionChanged {
-                        spotify_uri: track_id.to_string(),
+                        spotify_uri: spotify_uri.clone(),
                         position_ms,
                     });
-                    Some(BackendEvent::Playing {
-                        spotify_uri: track_id.to_string(),
-                    })
+                    Some(BackendEvent::Playing { spotify_uri })
                 }
-                PlayerEvent::Paused {
-                    track_id,
+                PlaybackEvent::Paused {
+                    spotify_uri,
                     position_ms,
-                    ..
                 } => {
                     let _ = event_sender.send(BackendEvent::PositionChanged {
-                        spotify_uri: track_id.to_string(),
+                        spotify_uri: spotify_uri.clone(),
                         position_ms,
                     });
-                    Some(BackendEvent::Paused {
-                        spotify_uri: track_id.to_string(),
-                    })
+                    Some(BackendEvent::Paused { spotify_uri })
                 }
-                PlayerEvent::EndOfTrack { track_id, .. } => Some(BackendEvent::EndOfTrack {
-                    spotify_uri: track_id.to_string(),
-                }),
-                PlayerEvent::Unavailable { track_id, .. } => Some(BackendEvent::TrackFailed {
-                    spotify_uri: track_id.to_string(),
-                    error: "Spotify cannot play this track".to_owned(),
-                }),
-                PlayerEvent::PositionChanged {
-                    track_id,
-                    position_ms,
-                    ..
+                PlaybackEvent::EndOfTrack { spotify_uri } => {
+                    Some(BackendEvent::EndOfTrack { spotify_uri })
                 }
-                | PlayerEvent::PositionCorrection {
-                    track_id,
+                PlaybackEvent::PositionChanged {
+                    spotify_uri,
                     position_ms,
-                    ..
-                }
-                | PlayerEvent::Seeked {
-                    track_id,
-                    position_ms,
-                    ..
                 } => Some(BackendEvent::PositionChanged {
-                    spotify_uri: track_id.to_string(),
+                    spotify_uri,
                     position_ms,
                 }),
-                _ => None,
             };
             if let Some(event) = event {
                 let _ = event_sender.send(event);
@@ -2643,7 +2579,6 @@ async fn load_context_track(
         .spotify_uri
         .as_deref()
         .context("track has no Spotify playback URI")?;
-    let spotify_uri = SpotifyUri::from_uri(spotify_uri).context("invalid Spotify track URI")?;
     let player = playback
         .as_ref()
         .context("Spotify playback is not connected")?;
@@ -2668,7 +2603,6 @@ fn restore_context_track(
         .spotify_uri
         .as_deref()
         .context("track has no Spotify playback URI")?;
-    let spotify_uri = SpotifyUri::from_uri(spotify_uri).context("invalid Spotify track URI")?;
     let player = playback
         .as_ref()
         .context("Spotify playback is not connected")?;

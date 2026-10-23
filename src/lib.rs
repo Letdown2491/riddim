@@ -1,5 +1,4 @@
 mod app;
-mod audio_output;
 pub mod backend;
 mod credential_worker;
 pub mod lifecycle;
@@ -7,6 +6,7 @@ pub mod model;
 mod oauth_callback;
 mod oauth_page;
 pub mod playback;
+pub mod soloist;
 pub mod spotify;
 pub mod storage;
 

@@ -1,10 +1,20 @@
-use std::{path::Path, time::Duration};
+use std::{path::Path, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use directories::ProjectDirs;
 use rusqlite::{Connection, params};
 
 use crate::model::{CachedLibrary, LibraryFingerprint, Playlist, QueueItem, Track};
+
+/// The Riddim data directory (`~/.local/share/riddim` on Linux), creating it
+/// if needed. Shared with the Soloist daemon's storage, which nests inside.
+pub(crate) fn data_dir() -> Result<PathBuf> {
+    let project = ProjectDirs::from("dev", "twoducks", "riddim")
+        .context("could not resolve the Riddim data directory")?;
+    std::fs::create_dir_all(project.data_dir())
+        .context("could not create the Riddim data directory")?;
+    Ok(project.data_dir().to_path_buf())
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ThemePreference {
@@ -56,11 +66,7 @@ pub struct Store {
 
 impl Store {
     pub fn open_default() -> Result<Self> {
-        let project = ProjectDirs::from("dev", "twoducks", "riddim")
-            .context("could not resolve the Riddim data directory")?;
-        std::fs::create_dir_all(project.data_dir())
-            .context("could not create the Riddim data directory")?;
-        Self::open(project.data_dir().join("riddim.sqlite3"))
+        Self::open(data_dir()?.join("riddim.sqlite3"))
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {

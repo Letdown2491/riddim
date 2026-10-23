@@ -329,14 +329,36 @@ fn client_id_validation_keeps_focus_and_only_submits_valid_input() {
         );
         window.press("enter", cx);
     });
+    // A valid Client ID alone is not enough: the Soloist API key is required
+    // too, and the error moves focus to the empty key field.
+    fixture.update(|window, cx| {
+        assert_eq!(window.find("soloist-api-key-input").focused(), Some(true));
+        assert!(
+            services::AppServices::session(cx)
+                .read(cx)
+                .setup_error()
+                .is_some()
+        );
+    });
+    fixture.no_commands();
+    fixture.update(|window, cx| {
+        window.click("soloist-api-key-input", cx);
+        window.input("spak_test-key", cx);
+        window.press("enter", cx);
+    });
     match fixture
         .backend
         .commands
         .try_recv()
         .expect("configuration command")
     {
-        BackendCommand::ConfigureSpotify { client_id, .. } => {
+        BackendCommand::ConfigureSpotify {
+            client_id,
+            soloist_api_key,
+            ..
+        } => {
             assert_eq!(client_id, "0123456789abcdef0123456789abcdef");
+            assert_eq!(soloist_api_key, "spak_test-key");
         }
         command => panic!("unexpected command: {command:?}"),
     }

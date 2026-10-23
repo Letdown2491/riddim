@@ -3,8 +3,8 @@
     "riddim": "0.1.0",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "55f26c1505b810df72530f5efe134e1bc2a570f1",
-    "lockfile_sha256": "ef09de2f53342dff2fd598ae21e866fc8d8b14d234339a4ed0cd6cb12ff89857"
+    "revision": "107f22b5cd651e638e584c8248fa875c87131144",
+    "lockfile_sha256": "400506fd7e0d3caab67fb1c2f934153adf09e38264ff980e1166a97d07cf9aa9"
   },
   "platform": {
     "os": "Linux",

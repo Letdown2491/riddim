@@ -8,7 +8,6 @@ rust-version = "1.97"
 anyhow = "1.0"
 async-channel = "2.5"
 base64 = "0.22"
-cpal = "0.18"
 directories = "6.0"
 env_logger = "0.11"
 futures = "0.3"
@@ -16,7 +15,6 @@ gpui-kit = "0.7.0"
 # keyring's default `v1` mode covers macOS Keychain, the Windows credential
 # store, and the Linux Secret Service (zbus) in one dependency.
 keyring = "4.1"
-librespot = { version = "0.8.0", default-features = false, features = ["native-tls"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
 souvlaki = { version = "0.8.3", default-features = false }
@@ -29,8 +27,6 @@ open = "5.3"
 rspotify = { version = "0.16.0", default-features = false, features = ["client-reqwest", "reqwest-native-tls"] }
 # gpui-kit's HTTP client is built on this reqwest fork; sharing it keeps one build.
 reqwest = { package = "gpui-pre-reqwest", version = "0.12.15", default-features = false, features = ["rustls-tls", "stream"] }
-ringbuf = "0.5"
-rubato = "5"
 # debug-embed embeds assets even in debug builds: rust-embed otherwise loads
 # from the filesystem at the compile-time path, which breaks when the binary
 # is built inside the container but run on the host (and unification applies
@@ -39,13 +35,12 @@ rust-embed = { version = "8", features = ["debug-embed"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.53", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.53", features = ["macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+# WebSocket client for the Soloist playback daemon; plain ws:// on loopback,
+# so no TLS feature is needed.
+tokio-tungstenite = "0.28"
 url = "2.5"
 log = "0.4.33"
-
-[build-dependencies]
-# librespot 0.8's build script is incompatible with vergen 9.1.
-vergen = "=9.0.6"
 
 [dev-dependencies]
 gpui-kit = { version = "0.7.0", features = ["test-support"] }

@@ -1,430 +1,393 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+//! Playback through the Spotify Soloist daemon.
+//!
+//! Soloist owns the Spotify Connect session and the audio output; riddim
+//! supervises the daemon, sends it control commands over its local WebSocket
+//! API, and translates its event stream into the [`PlaybackEvent`]s the rest
+//! of the app consumes. Setup requires a Soloist API key from the Spotify
+//! developer dashboard (stored in the keychain) and a one-time pairing from
+//! any Spotify app; no separate playback OAuth flow exists.
 
-use anyhow::{Context as _, Result, anyhow};
+use std::time::{Duration, Instant};
+
+use anyhow::{Result, anyhow};
 use keyring::Entry;
-use librespot::{
-    core::{SpotifyUri, authentication::Credentials, config::SessionConfig, session::Session},
-    oauth::OAuthClientBuilder,
-    playback::{
-        config::{AudioFormat, PlayerConfig, VolumeCtrl},
-        mixer::{self, Mixer, MixerConfig},
-        player::{Player, PlayerEventChannel},
-    },
-};
-use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, CsrfToken, EndpointNotSet, EndpointSet,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
-    basic::BasicClient,
-};
-use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 
-use crate::{
-    audio_output, credential_worker,
-    oauth_callback::receive_callback,
-    oauth_page::{OAuthStep, success_page},
-};
+use crate::{credential_worker, soloist};
 
-const PLAYBACK_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
-const PLAYBACK_REDIRECT_URI: &str = "http://127.0.0.1:8898/login";
 const KEYCHAIN_SERVICE: &str = "dev.twoducks.riddim";
-const KEYCHAIN_ACCOUNT: &str = "playback-refresh-token";
-const LOGGED_OUT_CREDENTIAL: &str = "riddim-logged-out";
+const KEYCHAIN_ACCOUNT_API_KEY: &str = "soloist-api-key";
 
-type PlaybackOAuthClient =
-    BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
-
-pub(crate) struct PlaybackAuthorization {
-    url: String,
-    csrf_token: CsrfToken,
-    pkce_verifier: PkceCodeVerifier,
-    listener: TcpListener,
+/// The control surface the queue machine in `backend.rs` drives.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PlaybackCommand {
+    Load {
+        spotify_uri: String,
+        playing: bool,
+        position_ms: u32,
+    },
+    Play,
+    Pause,
+    Seek {
+        position_ms: u32,
+    },
+    SetVolume(f32),
+    Stop,
 }
 
-impl PlaybackAuthorization {
-    pub(crate) fn url(&self) -> &str {
-        &self.url
-    }
-
-    async fn authorize(self) -> Result<PlaybackOAuthToken> {
-        let mut callback = receive_callback(&self.listener, "/login")
-            .await
-            .context("could not receive the Spotify playback callback")?;
-        let parameter = |name| {
-            callback
-                .url()
-                .query_pairs()
-                .find(|(key, _)| key == name)
-                .map(|(_, value)| value.into_owned())
-        };
-        if let Some(error) = parameter("error") {
-            return Err(anyhow!("Spotify playback authorization failed: {error}"));
-        }
-        let state = parameter("state").context("Spotify playback callback omitted state")?;
-        if state != self.csrf_token.secret().as_str() {
-            return Err(anyhow!("Spotify playback callback state did not match"));
-        }
-        let code = parameter("code").context("Spotify playback callback omitted code")?;
-
-        let http_client = oauth2_reqwest::ClientBuilder::new()
-            .redirect(oauth2_reqwest::redirect::Policy::none())
-            .build()?;
-        let response = playback_oauth_client()?
-            .exchange_code(AuthorizationCode::new(code))
-            .set_pkce_verifier(self.pkce_verifier)
-            .request_async(&http_client)
-            .await
-            .map_err(|error| anyhow!("could not exchange Spotify playback code: {error}"))?;
-        let body = success_page(OAuthStep::Playback, None);
-        callback
-            .respond_html(&body)
-            .await
-            .context("could not write the Spotify playback callback response")?;
-        Ok(PlaybackOAuthToken {
-            access_token: response.access_token().secret().to_owned(),
-            refresh_token: response
-                .refresh_token()
-                .map(|token| token.secret().to_owned())
-                .unwrap_or_default(),
-        })
-    }
-}
-
-struct PlaybackOAuthToken {
-    access_token: String,
-    refresh_token: String,
+/// The player events the rest of the app reacts to. Mirrors the librespot
+/// event set the backend was built on; Soloist signals are translated.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlaybackEvent {
+    Loading {
+        spotify_uri: String,
+    },
+    Playing {
+        spotify_uri: String,
+        position_ms: u32,
+    },
+    Paused {
+        spotify_uri: String,
+        position_ms: u32,
+    },
+    EndOfTrack {
+        spotify_uri: String,
+    },
+    PositionChanged {
+        spotify_uri: String,
+        position_ms: u32,
+    },
 }
 
 #[derive(Clone)]
 pub struct Playback {
-    player: Arc<Player>,
-    mixer: Arc<dyn Mixer>,
-    session: Session,
+    client: soloist::Soloist,
+    commands: mpsc::UnboundedSender<PlaybackCommand>,
+    events: std::sync::Arc<std::sync::Mutex<Option<mpsc::UnboundedReceiver<PlaybackEvent>>>>,
 }
 
 impl Playback {
-    pub(crate) async fn prepare_authorization() -> Result<PlaybackAuthorization> {
-        let listener = TcpListener::bind("127.0.0.1:8898")
-            .await
-            .context("could not listen for the Spotify playback callback")?;
-        let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-        let (url, csrf_token) = playback_oauth_client()?
-            .authorize_url(CsrfToken::new_random)
-            .add_scope(Scope::new("streaming".to_owned()))
-            .set_pkce_challenge(pkce_challenge)
-            .url();
-        Ok(PlaybackAuthorization {
-            url: url.to_string(),
-            csrf_token,
-            pkce_verifier,
-            listener,
-        })
+    /// Starts the Soloist daemon with the stored API key and connects.
+    pub(crate) async fn connect() -> Result<Self> {
+        let api_key = load_soloist_api_key().await?;
+        let api_key = api_key.ok_or_else(|| {
+            anyhow!("no Soloist API key is stored; generate one in the Spotify developer dashboard")
+        })?;
+        Self::start(&api_key).await
     }
 
-    pub(crate) async fn connect(
-        load_saved_token: bool,
-        authorization: Option<PlaybackAuthorization>,
-    ) -> Result<Self> {
-        let callback_page = success_page(OAuthStep::Playback, None);
-        let oauth =
-            OAuthClientBuilder::new(PLAYBACK_CLIENT_ID, PLAYBACK_REDIRECT_URI, vec!["streaming"])
-                .open_in_browser()
-                .with_custom_message(&callback_page)
-                .build()
-                .context("could not configure librespot authorization")?;
-        let saved_refresh_token = if load_saved_token {
-            load_playback_refresh_token().await.context(
-                "could not read playback credentials from Keychain; choose Always Allow when macOS asks",
-            )?
-        } else {
-            None
-        };
-        log::info!("playback: credentials read from Keychain");
-        let token = match saved_refresh_token {
-            Some(refresh_token) => {
-                let refreshed = oauth.refresh_token_async(&refresh_token).await;
-                log::info!("playback: access token refreshed");
-                let mut token = match refreshed {
-                    Ok(token) => token,
-                    Err(_) => match authorization {
-                        Some(authorization) => {
-                            let token = authorization.authorize().await?;
-                            return Self::connect_with_oauth_token(token).await;
-                        }
-                        None => oauth
-                            .get_access_token_async()
-                            .await
-                            .context("could not reauthorize librespot playback")?,
-                    },
-                };
-                if token.refresh_token.is_empty() {
-                    token.refresh_token = refresh_token;
-                }
-                token
-            }
-            None => match authorization {
-                Some(authorization) => {
-                    let token = authorization.authorize().await?;
-                    return Self::connect_with_oauth_token(token).await;
-                }
-                None => oauth
-                    .get_access_token_async()
-                    .await
-                    .context("could not authorize librespot playback")?,
-            },
-        };
-        if token.refresh_token.is_empty() {
-            return Err(anyhow!("Spotify returned an empty playback refresh token"));
-        }
-        let access_token = token.access_token;
-        persist_playback_refresh_token(token.refresh_token).await?;
-        Self::connect_with_access_token(access_token).await
-    }
-
+    /// Reconnects from persisted state; identical to connecting.
     pub async fn reconnect() -> Result<Self> {
-        let refresh_token = load_playback_refresh_token()
-            .await?
-            .context("Spotify playback credentials are not available")?;
-        let oauth =
-            OAuthClientBuilder::new(PLAYBACK_CLIENT_ID, PLAYBACK_REDIRECT_URI, vec!["streaming"])
-                .build()
-                .context("could not configure librespot reconnection")?;
-        let mut token = oauth
-            .refresh_token_async(&refresh_token)
-            .await
-            .context("could not refresh librespot playback credentials")?;
-        if token.refresh_token.is_empty() {
-            token.refresh_token = refresh_token;
-        }
-        let access_token = token.access_token;
-        persist_playback_refresh_token(token.refresh_token).await?;
-        Self::connect_with_access_token(access_token).await
+        Self::connect().await
     }
 
-    async fn connect_with_oauth_token(token: PlaybackOAuthToken) -> Result<Self> {
-        let PlaybackOAuthToken {
-            access_token,
-            refresh_token,
-        } = token;
-        validate_refresh_token(&refresh_token)?;
-        persist_playback_refresh_token(refresh_token).await?;
-        Self::connect_with_access_token(access_token).await
-    }
-
-    async fn connect_with_access_token(access_token: String) -> Result<Self> {
-        let session = Session::new(SessionConfig::default(), None);
-        session
-            .connect(Credentials::with_access_token(access_token), false)
-            .await
-            .context("librespot could not connect to Spotify")?;
-        let mixer = mixer::find(None).context("no supported audio mixer is available")?(
-            MixerConfig::default(),
-        )?;
-        let volume = mixer.get_soft_volume();
-        let player_config = PlayerConfig {
-            position_update_interval: Some(Duration::from_millis(250)),
-            ..PlayerConfig::default()
-        };
-        let player = Player::new(player_config, session.clone(), volume, move || {
-            audio_output::open(None, AudioFormat::F32)
-        });
+    pub(crate) async fn start(api_key: &str) -> Result<Self> {
+        let (client, soloist_events) = soloist::Soloist::start(api_key).await?;
+        let (commands, command_receiver) = mpsc::unbounded_channel();
+        let (event_sender, event_receiver) = mpsc::unbounded_channel();
+        tokio::spawn(controller(
+            client.clone(),
+            command_receiver,
+            soloist_events,
+            event_sender,
+        ));
         Ok(Self {
-            player,
-            mixer,
-            session,
+            client,
+            commands,
+            events: std::sync::Arc::new(std::sync::Mutex::new(Some(event_receiver))),
         })
     }
 
-    pub fn load(&self, spotify_uri: SpotifyUri, playing: bool, position_ms: u32) {
-        self.player.load(spotify_uri, playing, position_ms);
+    /// The event stream. Yields exactly one receiver per connection lifetime.
+    pub fn events(&self) -> Option<mpsc::UnboundedReceiver<PlaybackEvent>> {
+        self.events.lock().expect("soloist event lock").take()
+    }
+
+    pub fn load(&self, spotify_uri: impl Into<String>, playing: bool, position_ms: u32) {
+        let _ = self.commands.send(PlaybackCommand::Load {
+            spotify_uri: spotify_uri.into(),
+            playing,
+            position_ms,
+        });
     }
 
     pub fn play(&self) {
-        self.player.play();
+        let _ = self.commands.send(PlaybackCommand::Play);
     }
 
     pub fn pause(&self) {
-        self.player.pause();
+        let _ = self.commands.send(PlaybackCommand::Pause);
     }
 
     pub fn seek(&self, position_ms: u32) {
-        self.player.seek(position_ms);
+        let _ = self.commands.send(PlaybackCommand::Seek { position_ms });
     }
 
+    /// Volume as a 0..1 fraction; Soloist wants a percentage.
     pub fn set_volume(&self, volume: f32) {
-        self.mixer
-            .set_volume((volume.clamp(0., 1.) * f32::from(VolumeCtrl::MAX_VOLUME)) as u16);
+        let _ = self.commands.send(PlaybackCommand::SetVolume(volume));
     }
 
     pub fn stop(&self) {
-        self.player.stop();
+        let _ = self.commands.send(PlaybackCommand::Stop);
     }
 
-    pub fn events(&self) -> PlayerEventChannel {
-        self.player.get_player_event_channel()
-    }
-
+    /// True while the WebSocket is up and the daemon has a logged-in Spotify
+    /// Connect session.
     pub fn is_connected(&self) -> bool {
-        !self.session.is_invalid()
-    }
-
-    pub async fn radio_track_uris(&self, seed_uri: &str) -> Result<Vec<String>> {
-        let seed = SpotifyUri::from_uri(seed_uri).context("invalid radio seed track URI")?;
-        let response = self
-            .session
-            .spclient()
-            .get_apollo_station("tracks", &seed.to_uri()?, Some(30), Vec::new(), true)
-            .await
-            .context("Spotify track radio endpoint failed")?;
-        extract_track_uris(&response).context("Spotify track radio returned invalid JSON")
+        self.client.is_connected()
     }
 }
 
-fn playback_oauth_client() -> Result<PlaybackOAuthClient> {
-    Ok(
-        BasicClient::new(ClientId::new(PLAYBACK_CLIENT_ID.to_owned()))
-            .set_auth_uri(AuthUrl::new(
-                "https://accounts.spotify.com/authorize".to_owned(),
-            )?)
-            .set_token_uri(TokenUrl::new(
-                "https://accounts.spotify.com/api/token".to_owned(),
-            )?)
-            .set_redirect_uri(RedirectUrl::new(PLAYBACK_REDIRECT_URI.to_owned())?),
-    )
-}
+/// Translates app-level commands into Soloist commands and Soloist events
+/// into [`PlaybackEvent`]s, correlating the two so a track change caused by
+/// riddim's own load command is not mistaken for the current track ending.
+async fn controller(
+    client: soloist::Soloist,
+    mut commands: mpsc::UnboundedReceiver<PlaybackCommand>,
+    mut soloist_events: mpsc::UnboundedReceiver<soloist::Event>,
+    playback_events: mpsc::UnboundedSender<PlaybackEvent>,
+) {
+    // The last play command riddim issued itself, for correlating the
+    // daemon's track-changed events against riddim's own queue moves.
+    let mut last_play: Option<(String, Instant)> = None;
+    // The track the daemon is currently on, as far as the event stream shows.
+    let mut current_uri: Option<String> = None;
+    let mut status = soloist::PlaybackStatus::Idle;
+    // The last known position anchor, for interpolating between syncs.
+    let mut anchor: Option<PositionAnchor> = None;
+    let mut position_tick = tokio::time::interval(Duration::from_millis(500));
+    position_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-fn extract_track_uris(json: &[u8]) -> serde_json::Result<Vec<String>> {
-    fn visit(value: &serde_json::Value, seen: &mut HashSet<String>, uris: &mut Vec<String>) {
-        match value {
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    visit(value, seen, uris);
+    loop {
+        tokio::select! {
+            command = commands.recv() => {
+                let Some(command) = command else {
+                    // Every `Playback` handle is gone; dropping the soloist
+                    // client kills the daemon we spawned.
+                    return;
+                };
+                match command {
+                    PlaybackCommand::Load { spotify_uri, playing, position_ms } => {
+                        last_play = Some((spotify_uri.clone(), Instant::now()));
+                        client.command(soloist::Command::Play { uri: Some(soloist_uri(spotify_uri.clone())) });
+                        if !playing {
+                            client.command(soloist::Command::Pause);
+                        }
+                        if position_ms > 0 {
+                            client.command(soloist::Command::Seek { position_ms });
+                        }
+                        current_uri = Some(spotify_uri);
+                    }
+                    PlaybackCommand::Play => client.command(soloist::Command::Play { uri: None }),
+                    PlaybackCommand::Pause => client.command(soloist::Command::Pause),
+                    PlaybackCommand::Seek { position_ms } => {
+                        client.command(soloist::Command::Seek { position_ms });
+                        anchor = Some(PositionAnchor::now(position_ms as u64));
+                    }
+                    PlaybackCommand::SetVolume(volume) => client.command(soloist::Command::SetVolume {
+                        volume: (volume.clamp(0., 1.) * 100.).round() as u8,
+                    }),
+                    // The WebSocket API cannot clear the queue; pausing is the
+                    // closest stop, and riddim loads the next track explicitly.
+                    PlaybackCommand::Stop => client.command(soloist::Command::Pause),
                 }
             }
-            serde_json::Value::Object(values) => {
-                for value in values.values() {
-                    visit(value, seen, uris);
-                }
-            }
-            serde_json::Value::String(value) => {
-                let mut rest = value.as_str();
-                while let Some(offset) = rest.find("spotify:track:") {
-                    let candidate = &rest[offset..];
-                    let id = candidate["spotify:track:".len()..]
-                        .chars()
-                        .take_while(char::is_ascii_alphanumeric)
-                        .collect::<String>();
-                    if id.len() == 22 {
-                        let uri = format!("spotify:track:{id}");
-                        if seen.insert(uri.clone()) {
-                            uris.push(uri);
+            event = soloist_events.recv() => {
+                let Some(event) = event else { return; };
+                match event {
+                    soloist::Event::AuthState { .. } => {}
+                    soloist::Event::PlaybackState(state) => {
+                        if let Some(position) = state.position {
+                            anchor = Some(PositionAnchor::from(position));
+                        }
+                        let item_uri = state
+                            .item
+                            .map(|item| item.uri)
+                            .filter(|uri| !uri.is_empty());
+                        match item_uri {
+                            Some(uri) if current_uri.as_deref() != Some(uri.as_str()) => {
+                                // The engine moved to a different track. When
+                                // riddim commanded it, the backend already
+                                // knows the old track ended; otherwise it must
+                                // be told.
+                                if !recent_self_play(&last_play, &uri) {
+                                    if let Some(old) = current_uri.take() {
+                                        emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: old });
+                                    }
+                                } else {
+                                    current_uri.take();
+                                }
+                                current_uri = Some(uri.clone());
+                            }
+                            _ => {}
+                        }
+                        let Some(uri) = current_uri.clone() else {
+                            continue;
+                        };
+                        match state.status {
+                            Some(soloist::PlaybackStatus::Playing) => emit(&playback_events, PlaybackEvent::Playing {
+                                position_ms: interpolated(&anchor),
+                                spotify_uri: uri,
+                            }),
+                            Some(soloist::PlaybackStatus::Paused) => emit(&playback_events, PlaybackEvent::Paused {
+                                position_ms: interpolated(&anchor),
+                                spotify_uri: uri,
+                            }),
+                            Some(soloist::PlaybackStatus::Buffering) => emit(&playback_events, PlaybackEvent::Loading { spotify_uri: uri }),
+                            Some(soloist::PlaybackStatus::Idle) | None => {}
                         }
                     }
-                    rest = &candidate["spotify:track:".len()..];
+                    soloist::Event::TrackChanged { item } => {
+                        let uri = item.uri;
+                        if uri.is_empty() || current_uri.as_deref() == Some(uri.as_str()) {
+                            continue;
+                        }
+                        if !recent_self_play(&last_play, &uri) {
+                            // The engine advanced on its own (queue or
+                            // autoplay): the current track just ended.
+                            if let Some(old) = current_uri.take() {
+                                emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: old });
+                            }
+                        }
+                        current_uri = Some(uri.clone());
+                        emit(&playback_events, PlaybackEvent::Loading { spotify_uri: uri });
+                    }
+                    soloist::Event::PlaybackChanged { status: new } => {
+                        status = new;
+                        match (new, current_uri.clone()) {
+                            (soloist::PlaybackStatus::Playing, Some(uri)) => emit(&playback_events, PlaybackEvent::Playing {
+                                position_ms: interpolated(&anchor),
+                                spotify_uri: uri,
+                            }),
+                            (soloist::PlaybackStatus::Paused, Some(uri)) => emit(&playback_events, PlaybackEvent::Paused {
+                                position_ms: interpolated(&anchor),
+                                spotify_uri: uri,
+                            }),
+                            (soloist::PlaybackStatus::Buffering, Some(uri)) => emit(&playback_events, PlaybackEvent::Loading { spotify_uri: uri }),
+                            // The engine ran out of music: the track ended.
+                            (soloist::PlaybackStatus::Idle, Some(uri)) => {
+                                current_uri = None;
+                                emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: uri });
+                            }
+                            (_, None) => {}
+                        }
+                    }
+                    soloist::Event::PositionSync { position } => {
+                        anchor = Some(PositionAnchor::from(position));
+                        if status == soloist::PlaybackStatus::Playing
+                            && let Some(uri) = current_uri.clone()
+                        {
+                            emit(&playback_events, PlaybackEvent::PositionChanged {
+                                position_ms: interpolated(&anchor),
+                                spotify_uri: uri,
+                            });
+                        }
+                    }
+                    // riddim's own volume watch is the source of truth, and
+                    // queue/context/options changes drive nothing in the app
+                    // yet; command results are advisory, errors are logged.
+                    soloist::Event::VolumeChanged { .. }
+                    | soloist::Event::DeviceChanged { .. }
+                    | soloist::Event::ContextChanged { .. }
+                    | soloist::Event::OptionsChanged { .. }
+                    | soloist::Event::QueueChanged { .. }
+                    | soloist::Event::CommandResult { .. } => {}
+                    soloist::Event::Error { message } => log::warn!("soloist: {message}"),
                 }
             }
-            _ => {}
+            _ = position_tick.tick(), if status == soloist::PlaybackStatus::Playing => {
+                if let Some(uri) = current_uri.clone() {
+                    emit(&playback_events, PlaybackEvent::PositionChanged {
+                        position_ms: interpolated(&anchor),
+                        spotify_uri: uri,
+                    });
+                }
+            }
+        }
+    }
+}
+fn recent_self_play(last_play: &Option<(String, Instant)>, uri: &str) -> bool {
+    last_play
+        .as_ref()
+        .is_some_and(|(played, at)| played == uri && at.elapsed() < Duration::from_secs(30))
+}
+
+/// Soloist URIs must be plain `spotify:` URIs; the app stores them as such.
+fn soloist_uri(spotify_uri: String) -> String {
+    spotify_uri
+}
+
+/// The last known position anchor, for interpolating between syncs.
+#[derive(Clone, Copy)]
+struct PositionAnchor {
+    position_ms: u64,
+    at: std::time::SystemTime,
+    speed: f64,
+}
+
+impl PositionAnchor {
+    fn from(position: soloist::Position) -> Self {
+        Self {
+            position_ms: position.position_ms,
+            at: std::time::SystemTime::UNIX_EPOCH + Duration::from_millis(position.timestamp_ms),
+            speed: position.speed,
         }
     }
 
-    let value = serde_json::from_slice(json)?;
-    let mut seen = HashSet::new();
-    let mut uris = Vec::new();
-    visit(&value, &mut seen, &mut uris);
-    Ok(uris)
+    fn now(position_ms: u64) -> Self {
+        Self {
+            position_ms,
+            at: std::time::SystemTime::now(),
+            speed: 1.,
+        }
+    }
+
+    /// The position now, extrapolated from the anchor.
+    fn interpolated(&self) -> u32 {
+        let elapsed = self.at.elapsed().unwrap_or_default().as_millis() as f64 * self.speed;
+        ((self.position_ms as f64) + elapsed).max(0.) as u32
+    }
 }
 
-fn playback_token_entry() -> Result<Entry> {
-    Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT).map_err(Into::into)
+fn interpolated(anchor: &Option<PositionAnchor>) -> u32 {
+    anchor.map_or(0, |a| a.interpolated())
 }
 
-fn playback_refresh_token() -> Result<Option<String>> {
-    match playback_token_entry()?.get_password() {
-        Ok(token) if token == LOGGED_OUT_CREDENTIAL => Ok(None),
-        Ok(token) => Ok(Some(token)),
+fn emit(events: &mpsc::UnboundedSender<PlaybackEvent>, event: PlaybackEvent) {
+    let _ = events.send(event);
+}
+
+// ---------------------------------------------------------------------------
+// Keychain storage for the Soloist API key.
+
+fn api_key_entry() -> Result<Entry> {
+    Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT_API_KEY).map_err(Into::into)
+}
+
+pub(crate) async fn save_soloist_api_key(api_key: String) -> Result<()> {
+    let trimmed = api_key.trim().to_owned();
+    if trimmed.is_empty() {
+        return Err(anyhow!("the Soloist API key is empty"));
+    }
+    credential_worker::run(move || api_key_entry()?.set_password(&trimmed).map_err(Into::into))
+        .await
+}
+
+pub(crate) async fn load_soloist_api_key() -> Result<Option<String>> {
+    credential_worker::run(|| match api_key_entry()?.get_password() {
+        Ok(key) if key.is_empty() => Ok(None),
+        Ok(key) => Ok(Some(key)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(anyhow!(error)),
-    }
-}
-
-fn save_playback_refresh_token(refresh_token: &str) -> Result<()> {
-    let refresh_token = validate_refresh_token(refresh_token)?;
-    playback_token_entry()?
-        .set_password(refresh_token)
-        .map_err(Into::into)
-}
-
-async fn load_playback_refresh_token() -> Result<Option<String>> {
-    credential_worker::run(playback_refresh_token).await
-}
-
-async fn persist_playback_refresh_token(refresh_token: String) -> Result<()> {
-    credential_worker::run(move || save_playback_refresh_token(&refresh_token)).await
-}
-
-fn validate_refresh_token(refresh_token: &str) -> Result<&str> {
-    if refresh_token.is_empty() {
-        Err(anyhow!("Spotify returned an empty playback refresh token"))
-    } else {
-        Ok(refresh_token)
-    }
-}
-
-pub async fn delete_playback_refresh_token() -> Result<()> {
-    credential_worker::run(|| match playback_token_entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(delete_error) => playback_token_entry()?
-            .set_password(LOGGED_OUT_CREDENTIAL)
-            .with_context(|| format!("could not invalidate credential after {delete_error}")),
     })
     .await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Playback, extract_track_uris, validate_refresh_token};
-
-    #[test]
-    fn empty_refresh_tokens_are_rejected() {
-        assert!(validate_refresh_token("").is_err());
-        assert_eq!(
-            validate_refresh_token("refresh-token").unwrap(),
-            "refresh-token"
-        );
-    }
-
-    #[tokio::test]
-    async fn prepared_authorization_has_pkce_state_and_expected_redirect() {
-        let authorization = Playback::prepare_authorization().await.unwrap();
-        let url = url::Url::parse(authorization.url()).unwrap();
-        let parameters = url
-            .query_pairs()
-            .collect::<std::collections::HashMap<_, _>>();
-
-        assert_eq!(url.host_str(), Some("accounts.spotify.com"));
-        assert_eq!(parameters.get("scope").unwrap(), "streaming");
-        assert_eq!(parameters.get("code_challenge_method").unwrap(), "S256");
-        assert!(parameters.contains_key("code_challenge"));
-        assert!(parameters.contains_key("state"));
-    }
-
-    #[test]
-    fn extracts_unique_track_uris_from_nested_radio_json() {
-        let json = br#"{
-            "items":[
-                {"uri":"spotify:track:0123456789ABCDEFGHIJKL"},
-                {"metadata":{"context":"before spotify:track:abcdefghijklmnopqrstuv after"}},
-                {"uri":"spotify:track:0123456789ABCDEFGHIJKL"},
-                {"uri":"spotify:album:0123456789ABCDEFGHIJKL"},
-                {"uri":"spotify:track:short"}
-            ]
-        }"#;
-
-        assert_eq!(
-            extract_track_uris(json).unwrap(),
-            vec![
-                "spotify:track:0123456789ABCDEFGHIJKL",
-                "spotify:track:abcdefghijklmnopqrstuv"
-            ]
-        );
-    }
+pub(crate) async fn delete_soloist_api_key() -> Result<()> {
+    credential_worker::run(|| match api_key_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(anyhow!(error)),
+    })
+    .await
 }

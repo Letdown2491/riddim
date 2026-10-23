@@ -26,7 +26,7 @@ use crate::{
         Album, AlbumRef, Artist, ArtistRef, MediaKind, Playlist, Provider, Show, Track, UserProfile,
     },
     oauth_callback::receive_callback,
-    oauth_page::{OAuthStep, success_page},
+    oauth_page::success_page,
 };
 
 const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
@@ -329,15 +329,8 @@ impl Spotify {
         credential_worker::run(TokenVault::delete).await
     }
 
-    pub async fn authorize(&mut self, playback_authorization_url: Option<&str>) -> Result<()> {
+    pub async fn authorize(&mut self) -> Result<()> {
         if self.is_authorized().await? {
-            if let Some(url) = playback_authorization_url {
-                let url = url.to_owned();
-                tokio::task::spawn_blocking(move || open::that(url))
-                    .await
-                    .context("browser task failed")?
-                    .context("could not open the Spotify playback authorization page")?;
-            }
             return Ok(());
         }
         let listener = TcpListener::bind("127.0.0.1:8888")
@@ -369,7 +362,7 @@ impl Spotify {
             .context("Spotify did not return an access token")?;
         credential_worker::run(move || TokenVault::save(&token)).await?;
 
-        let body = success_page(OAuthStep::Library, playback_authorization_url);
+        let body = success_page();
         callback.respond_html(&body).await?;
         Ok(())
     }
@@ -680,6 +673,38 @@ impl Spotify {
     /// reports playability when a market is given.
     pub async fn resolve_playable_track_uris(&self, uris: &[String]) -> Result<Vec<Track>> {
         self.resolve_tracks(uris, Some(Market::FromToken)).await
+    }
+
+    /// Track radio: similar-track URIs for autoplay, seeded on one track.
+    ///
+    /// Spotify's native radio station lives on an endpoint only the embedded
+    /// players can reach, so this uses the Web API recommendations endpoint.
+    /// That endpoint is deprecated upstream; when it stops answering, autoplay
+    /// degrades gracefully (the caller logs and moves on).
+    pub async fn radio_track_uris(&self, seed_uri: &str) -> Result<Vec<String>> {
+        self.gated(async {
+            let seed = TrackId::from_uri(seed_uri).context("invalid radio seed track URI")?;
+            let recommendations = self
+                .client
+                .recommendations(
+                    [],
+                    None::<Vec<ArtistId<'static>>>,
+                    None::<Vec<&str>>,
+                    Some(vec![seed.into_static()]),
+                    Some(Market::FromToken),
+                    Some(30),
+                )
+                .await
+                .context("Spotify recommendations failed")?;
+            let uris: Vec<String> = recommendations
+                .tracks
+                .iter()
+                .filter_map(|track| track.id.clone())
+                .map(|id| id.uri())
+                .collect();
+            Ok(uris)
+        })
+        .await
     }
 
     async fn resolve_tracks(&self, uris: &[String], market: Option<Market>) -> Result<Vec<Track>> {

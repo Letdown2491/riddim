@@ -28,30 +28,31 @@
 
 ## Built With
 
-**Rust** + **GPUI** + **librespot** + **rspotify** + **SQLite** + **CPAL**
+**Rust** + **GPUI** + **Spotify Soloist** + **rspotify** + **SQLite**
 
-GPUI renders the native GPU-accelerated interface, librespot handles playback
-through CPAL, rspotify connects to the Spotify Web API, and SQLite keeps local state.
+GPUI renders the native GPU-accelerated interface, Spotify's official Soloist
+daemon handles playback, rspotify connects to the Spotify Web API, and SQLite
+keeps local state.
 
 ## Requirements
 
-Linux with Spotify Premium. Playback goes through ALSA, which PipeWire and
-PulseAudio servers provide. A desktop keyring (GNOME Keyring, KWallet, or
-another Secret Service provider) stores Spotify credentials. A Vulkan driver
-renders the interface.
+Linux with Spotify Premium, and a [Soloist binary](https://developer.spotify.com/documentation/soloist)
+on your `PATH` (or `RIDDIM_SOLOIST_BIN` pointing at one). Playback goes
+through ALSA, which PipeWire and PulseAudio servers provide. A desktop
+keyring (GNOME Keyring, KWallet, or another Secret Service provider) stores
+Spotify credentials. A Vulkan driver renders the interface.
 
 ## Set Up Spotify
 
 On first launch, Riddim walks you through creating a Spotify developer app
-and entering its Client ID. Client IDs are public; Riddim never needs your
-client secret.
+and entering its Client ID plus a Soloist API key. Client IDs are public;
+Riddim never needs your client secret.
 
-Spotify then asks you to approve Riddim twice in the browser — first for
-your library (under your developer app, redirecting to
-`http://127.0.0.1:8888/callback`), then for playback (under Riddim's
-built-in player identity, redirecting to `http://127.0.0.1:8898/login`).
-Both redirects are local callback servers Riddim runs momentarily; nothing
-is served to the network.
+Spotify then asks you to approve Riddim once in the browser — for your
+library, under your developer app, redirecting to
+`http://127.0.0.1:8888/callback` (a local callback server Riddim runs
+momentarily; nothing is served to the network). Playback pairs separately,
+once, by picking **riddim** in the device picker of any Spotify app.
 
 The full walkthrough, including what to do when the browser does not open,
 Spotify rejects a redirect, or no keyring is running, is in

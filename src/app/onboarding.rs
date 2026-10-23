@@ -18,7 +18,9 @@ pub(super) enum OnboardingEvent {
 pub(super) struct Onboarding {
     session: Entity<session::Session>,
     client_id_input: Entity<InputState>,
+    soloist_api_key_input: Entity<InputState>,
     _client_id_subscription: Subscription,
+    _api_key_subscription: Subscription,
     focus_handle: FocusHandle,
     /// The last error the surrounding window reported, shown alongside the form.
     last_error: Option<SharedString>,
@@ -30,8 +32,22 @@ impl Onboarding {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let client_id_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("32-character Client ID"));
-        let subscription = cx.subscribe_in(
+        let client_id_subscription = cx.subscribe_in(
             &client_id_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    this.session
+                        .update(cx, |session, cx| session.clear_setup_error(cx));
+                }
+                InputEvent::PressEnter { .. } => this.configure(window, cx),
+                _ => {}
+            },
+        );
+        let soloist_api_key_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Soloist API key (spak_…)"));
+        let api_key_subscription = cx.subscribe_in(
+            &soloist_api_key_input,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
@@ -45,7 +61,9 @@ impl Onboarding {
         Self {
             session: services::AppServices::session(cx),
             client_id_input,
-            _client_id_subscription: subscription,
+            soloist_api_key_input,
+            _client_id_subscription: client_id_subscription,
+            _api_key_subscription: api_key_subscription,
             focus_handle: cx.focus_handle(),
             last_error: None,
         }
@@ -84,8 +102,25 @@ impl Onboarding {
             cx.notify();
             return;
         }
+        let api_key = self
+            .soloist_api_key_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
+        if api_key.is_empty() {
+            self.session.update(cx, |session, cx| {
+                session.reject_client_id(
+                    "Paste the Soloist API key from your Spotify developer dashboard.",
+                    cx,
+                )
+            });
+            window.focus(&self.soloist_api_key_input.read(cx).focus_handle(cx), cx);
+            cx.notify();
+            return;
+        }
         self.session
-            .update(cx, |session, cx| session.configure(client_id, cx));
+            .update(cx, |session, cx| session.configure(client_id, api_key, cx));
         cx.notify();
     }
 
@@ -335,8 +370,7 @@ impl Onboarding {
             .p_12()
             .flex()
             .flex_col()
-            .child(Self::onboarding_task_header(palette, "Set up Spotify", "Two steps, about two minutes."))
-            .child(
+            .child(Self::onboarding_task_header(palette, "Set up Spotify", "Two steps, about two minutes."))            .child(
                 div()
                     .mt_7()
                     .flex()
@@ -433,6 +467,17 @@ impl Onboarding {
                             .child(
                                 div().mt_2().child(self.spotify_client_id_field(palette, window, cx)),
                             )
+                            .child(
+                                div()
+                                    .mt_6()
+                                    .text_sm()
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(palette.text_primary))
+                                    .child("Soloist API key"),
+                            )
+                            .child(
+                                div().mt_2().child(self.soloist_api_key_field(palette, window, cx)),
+                            )
                             .when_some(error, |form, error| {
                                 form.child(
                                     div()
@@ -453,7 +498,9 @@ impl Onboarding {
                                         .text_xs()
                                         .text_color(rgb(palette.text_muted))
                                         .child(
-                                            "Client IDs are public. Never enter your client secret.",
+                                            "Client IDs are public. Never enter your client secret. \
+                                             The Soloist API key powers playback; generate it under \
+                                             Web Playback in the same dashboard.",
                                         ),
                                 )
                             })
@@ -496,6 +543,23 @@ impl Onboarding {
             )
     }
 
+    fn soloist_api_key_field(&self, palette: RiddimPalette, window: &Window, cx: &App) -> Div {
+        components::text_field_frame(palette, &self.soloist_api_key_input, window, cx)
+            .h_12()
+            .w_full()
+            .child(
+                Input::new(&self.soloist_api_key_input)
+                    .id("soloist-api-key-input")
+                    .appearance(false)
+                    .bordered(false)
+                    .focus_bordered(false)
+                    .px_0()
+                    .h_full()
+                    .flex_1()
+                    .min_w_0(),
+            )
+    }
+
     fn spotify_login_form(&mut self, cx: &mut Context<Self>) -> Div {
         let palette = appearance::Appearance::palette(cx);
         let connecting = matches!(self.session.read(cx).state(), ConnectionState::Connecting);
@@ -510,27 +574,49 @@ impl Onboarding {
             .flex()
             .flex_col()
             .justify_center()
-            .child(Self::onboarding_task_header(palette,
+            .child(Self::onboarding_task_header(
+                palette,
                 "Log in to Spotify",
-                "Spotify will ask you to approve Riddim twice: first for your library, then for playback.",
+                "Spotify will ask you to approve Riddim for your library.",
             ))
             .when(!configuration_blocked, |form| {
                 form.child(div().mt_8().flex().justify_start().child(if connecting {
-                    components::pending_pill(appearance::Appearance::palette(cx), "spotify-login-pending", "Log in with Spotify")
-                        .h_12()
-                        .gap_2()
-                        .child(Spinner::new().small())
+                    components::pending_pill(
+                        appearance::Appearance::palette(cx),
+                        "spotify-login-pending",
+                        "Log in with Spotify",
+                    )
+                    .h_12()
+                    .gap_2()
+                    .child(Spinner::new().small())
                 } else {
-                    components::pill(appearance::Appearance::palette(cx), "spotify-login", "Log in with Spotify", true)
-                        .h_12()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.emit(OnboardingEvent::ClearError);
-                            this.session
-                                .update(cx, |session, cx| session.set_connecting(cx));
-                            cx.emit(OnboardingEvent::Authenticate);
-                            cx.notify();
-                        }))
+                    components::pill(
+                        appearance::Appearance::palette(cx),
+                        "spotify-login",
+                        "Log in with Spotify",
+                        true,
+                    )
+                    .h_12()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.emit(OnboardingEvent::ClearError);
+                        this.session
+                            .update(cx, |session, cx| session.set_connecting(cx));
+                        cx.emit(OnboardingEvent::Authenticate);
+                        cx.notify();
+                    }))
                 }))
+            })
+            .when(!configuration_blocked, |form| {
+                form.child(
+                    div()
+                        .mt_4()
+                        .text_xs()
+                        .text_color(rgb(palette.text_muted))
+                        .child(
+                            "Playback runs on Spotify's Soloist engine. After signing in, pair \
+                             Riddim once: pick riddim as the playback device in any Spotify app.",
+                        ),
+                )
             })
             .when_some(self.last_error.clone(), |form, error| {
                 form.child(
