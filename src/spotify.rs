@@ -30,7 +30,7 @@ use crate::{
 };
 
 const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
-const KEYCHAIN_SERVICE: &str = "dev.twoducks.riddim";
+const KEYCHAIN_SERVICE: &str = "io.github.letdown2491.riddim";
 const KEYCHAIN_ACCOUNT: &str = "oauth-token";
 const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const LOGGED_OUT_CREDENTIAL: &str = "riddim-logged-out";

@@ -1595,7 +1595,7 @@ impl Worker {
                 self.connection.fail_pending_play(&error, &self.events);
                 let _ = self
                     .events
-                    .send(BackendEvent::PlaybackFailed(error.to_string()));
+                    .send(BackendEvent::PlaybackFailed(format!("{error:#}")));
             }
             Some(Err(error)) => {
                 self.connection.fail_pending_play(&error, &self.events);

@@ -760,9 +760,10 @@ async fn binary_fallback(error: anyhow::Error) -> Result<PathBuf> {
         log::warn!("soloist: managed download failed ({error:#}); using the daemon on PATH");
         return Ok(on_path);
     }
-    Err(error.context(
-        "could not install the Spotify Soloist daemon; see \
-         https://developer.spotify.com/documentation/soloist or set RIDDIM_SOLOIST_BIN",
+    // Inline the cause chain: the surfaced message is all the user sees.
+    Err(anyhow!(
+        "could not install the Spotify Soloist daemon ({error:#}); see \
+         https://developer.spotify.com/documentation/soloist or set RIDDIM_SOLOIST_BIN"
     ))
 }
 
@@ -805,7 +806,10 @@ async fn refresh_managed(managed: &Path) -> Result<()> {
         }
     };
     let _ = std::fs::remove_file(&archive_path);
-    smoke_check(&staged).await?;
+    if let Err(error) = smoke_check(&staged).await {
+        let _ = std::fs::remove_file(&staged);
+        return Err(error);
+    }
     std::fs::rename(&staged, managed).context("could not install the downloaded daemon")?;
     Ok(())
 }
@@ -864,9 +868,17 @@ async fn smoke_check(staged: &Path) -> Result<()> {
         )
     })?;
     if !output.status.success() {
+        // A missing shared library fails inside the loader, which prints the
+        // culprit to stderr and exits: surface both verbatim.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        let hint = if stderr.contains("libatomic") {
+            "; installing libatomic fixes this (Fedora: sudo dnf install libatomic)"
+        } else {
+            ""
+        };
         return Err(anyhow!(
-            "the downloaded Soloist daemon exited with {:?} on --version",
-            output.status
+            "the downloaded Soloist daemon did not run: {stderr}{hint}"
         ));
     }
     Ok(())

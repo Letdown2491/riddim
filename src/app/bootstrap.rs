@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn run() {
-    let _ = env_logger::Builder::from_default_env()
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", "info"))
         .format_timestamp_millis()
         .try_init();
     log::info!("startup: process started");

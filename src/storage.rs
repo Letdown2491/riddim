@@ -9,7 +9,7 @@ use crate::model::{CachedLibrary, LibraryFingerprint, Playlist, QueueItem, Track
 /// The Riddim data directory (`~/.local/share/riddim` on Linux), creating it
 /// if needed. Shared with the Soloist daemon's storage, which nests inside.
 pub(crate) fn data_dir() -> Result<PathBuf> {
-    let project = ProjectDirs::from("dev", "twoducks", "riddim")
+    let project = ProjectDirs::from("io", "github", "riddim")
         .context("could not resolve the Riddim data directory")?;
     std::fs::create_dir_all(project.data_dir())
         .context("could not create the Riddim data directory")?;

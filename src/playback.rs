@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::{credential_worker, soloist};
 
-const KEYCHAIN_SERVICE: &str = "dev.twoducks.riddim";
+const KEYCHAIN_SERVICE: &str = "io.github.letdown2491.riddim";
 const KEYCHAIN_ACCOUNT_API_KEY: &str = "soloist-api-key";
 
 /// The control surface the queue machine in `backend.rs` drives.

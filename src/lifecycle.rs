@@ -43,7 +43,7 @@ impl InstanceLifecycle {
     }
 
     pub fn acquire() -> Result<Instance> {
-        let project_dirs = ProjectDirs::from("dev", "twoducks", "riddim")
+        let project_dirs = ProjectDirs::from("io", "github", "riddim")
             .context("could not determine the Riddim cache directory")?;
         Self::acquire_at(project_dirs.cache_dir().join("activation.sock"))
     }
