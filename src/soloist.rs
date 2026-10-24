@@ -8,12 +8,20 @@
 //!
 //! [Soloist]: https://developer.spotify.com/documentation/soloist
 
-use std::{path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    io::Write as _,
+    os::unix::fs::PermissionsExt as _,
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::{Duration, Instant, SystemTime},
+};
 
 use anyhow::{Context as _, Result, anyhow};
+use flate2::read::GzDecoder;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+use tar::Archive;
 use tokio::{
     process::{Child, Command as ProcessCommand},
     sync::{mpsc, watch},
@@ -23,11 +31,22 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 /// Soloist builds expire 90 days after their build date and exit with this
 /// code (per the official docs); a dead daemon must not be respawned forever.
 const EXPIRED_BUILD_EXIT_CODE: i32 = 10;
+const EXPIRED_BUILD_MESSAGE: &str = "the Spotify Soloist build has expired";
 /// How long to wait for the daemon to publish its WebSocket endpoint.
 const ENDPOINT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Backoff bounds between WebSocket reconnect attempts.
 const RECONNECT_MIN: Duration = Duration::from_millis(500);
 const RECONNECT_MAX: Duration = Duration::from_secs(30);
+/// Where Spotify publishes Soloist release archives.
+const DOWNLOAD_BASE: &str = "https://soloist-builds.spotifycdn.com";
+/// Managed builds are proactively refreshed well inside the 90-day expiry so
+/// playback never dies of old age at runtime.
+const REFRESH_AFTER: Duration = Duration::from_secs(60 * 24 * 60 * 60);
+/// Minimum spacing between reactive refresh attempts, so a network outage on
+/// the reconnect backoff does not hammer Spotify's download server.
+const REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
+/// Whole-download budget for fetching a release archive.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A running Soloist daemon: either spawned by this process (owned, killed on
 /// drop) or adopted from a previous run that died without cleaning up.
@@ -35,6 +54,11 @@ struct Daemon {
     child: Option<Child>,
     data_dir: PathBuf,
     api_key: String,
+    binary_path: PathBuf,
+    /// True when `binary_path` is riddim's managed copy, which can be
+    /// replaced with a fresh download when it expires.
+    managed_binary: bool,
+    last_refresh: Option<Instant>,
 }
 
 impl Daemon {
@@ -43,10 +67,17 @@ impl Daemon {
         let data_dir = crate::storage::data_dir()?.join("soloist");
         std::fs::create_dir_all(&data_dir)
             .context("could not create the Soloist data directory")?;
+        // Resolving the binary may download one on first run; do it before
+        // anything else so a missing daemon fails with a clear message.
+        let binary_path = resolve_binary().await?;
+        let managed_binary = managed_binary_path().is_ok_and(|managed| managed == binary_path);
         let mut daemon = Self {
             child: None,
             data_dir,
             api_key: api_key.to_owned(),
+            binary_path,
+            managed_binary,
+            last_refresh: None,
         };
         if daemon.endpoint_files().is_some() {
             log::info!("soloist: adopting already-running daemon");
@@ -58,8 +89,7 @@ impl Daemon {
     }
 
     async fn spawn(&mut self) -> Result<()> {
-        let binary = std::env::var("RIDDIM_SOLOIST_BIN").unwrap_or_else(|_| "soloist".to_owned());
-        let child = ProcessCommand::new(&binary)
+        let child = ProcessCommand::new(&self.binary_path)
             .arg("--device-name")
             .arg("riddim")
             .arg("--api-key")
@@ -77,8 +107,8 @@ impl Daemon {
             .spawn()
             .map_err(|error| match error.kind() {
                 std::io::ErrorKind::NotFound => anyhow!(
-                    "the Spotify Soloist daemon ({binary}) is not installed; see \
-                     https://developer.spotify.com/documentation/soloist"
+                    "the Spotify Soloist daemon ({}) does not exist or is not executable",
+                    self.binary_path.display()
                 ),
                 _ => anyhow!("could not start the Spotify Soloist daemon: {error}"),
             })?;
@@ -122,14 +152,40 @@ impl Daemon {
     }
 
     fn exit_error(&self, status: std::process::ExitStatus) -> anyhow::Error {
-        let code = status.code();
-        if code == Some(EXPIRED_BUILD_EXIT_CODE) {
-            return anyhow!(
-                "the Spotify Soloist build has expired; install a newer one from \
-                 https://developer.spotify.com/documentation/soloist"
-            );
+        if status.code() == Some(EXPIRED_BUILD_EXIT_CODE) {
+            return anyhow!("{EXPIRED_BUILD_MESSAGE}");
         }
         anyhow!("the Spotify Soloist daemon exited unexpectedly ({status})")
+    }
+
+    /// Reacts to the daemon dying of build expiry by fetching a fresh managed
+    /// build. Rate-limited so repeated attempts ride the reconnect backoff
+    /// without hammering Spotify's download server.
+    async fn refresh_after_expiry(&mut self) -> ExpiryOutcome {
+        if !self.managed_binary {
+            return ExpiryOutcome::Unrecoverable;
+        }
+        if self
+            .last_refresh
+            .is_some_and(|at| at.elapsed() < REFRESH_RETRY_INTERVAL)
+        {
+            return ExpiryOutcome::Waiting;
+        }
+        self.last_refresh = Some(Instant::now());
+        match tokio::time::timeout(DOWNLOAD_TIMEOUT, refresh_managed(&self.binary_path)).await {
+            Ok(Ok(())) => {
+                log::info!("soloist: installed a fresh daemon build");
+                ExpiryOutcome::Refreshed
+            }
+            Ok(Err(error)) => {
+                log::warn!("soloist: could not refresh the expired daemon: {error:#}");
+                ExpiryOutcome::Waiting
+            }
+            Err(_) => {
+                log::warn!("soloist: daemon refresh timed out");
+                ExpiryOutcome::Waiting
+            }
+        }
     }
 
     /// Connects to the daemon's WebSocket API, respawning the daemon first if
@@ -300,17 +356,28 @@ async fn connection_loop(
             }
             Err(error) => {
                 log::warn!("soloist: {error:#}");
-                // An expired build must not be respawned; surface it and stop.
-                if error.to_string().contains("expired") {
-                    let _ = events.send(Event::Error {
-                        message: error.to_string(),
-                    });
-                    let _ = connected.send(false);
-                    return;
+                if error.to_string().contains(EXPIRED_BUILD_MESSAGE) {
+                    // An expired build is recoverable while riddim manages
+                    // the binary: fetch a fresh one and come right back.
+                    match daemon.refresh_after_expiry().await {
+                        ExpiryOutcome::Refreshed => {
+                            daemon.reset().await;
+                            continue;
+                        }
+                        ExpiryOutcome::Waiting => daemon.reset().await,
+                        ExpiryOutcome::Unrecoverable => {
+                            let _ = events.send(Event::Error {
+                                message: error.to_string(),
+                            });
+                            let _ = connected.send(false);
+                            return;
+                        }
+                    }
+                } else {
+                    // Whatever answered (or not) at that endpoint is not
+                    // usable: clear the way for a fresh spawn next attempt.
+                    daemon.reset().await;
                 }
-                // Whatever answered (or not) at that endpoint is not usable:
-                // clear the way for a fresh spawn on the next attempt.
-                daemon.reset().await;
             }
         }
         log::info!("soloist: reconnecting in {backoff:?}");
@@ -334,6 +401,17 @@ async fn connection_loop(
 enum ConnectionEnd {
     Shutdown,
     Lost,
+}
+
+/// What happened when an expired build was detected.
+enum ExpiryOutcome {
+    /// A fresh build was installed: reconnect immediately.
+    Refreshed,
+    /// The refresh could not run just now (rate limit or network): back off
+    /// and try again on a later cycle.
+    Waiting,
+    /// The binary is not riddim-managed and cannot be self-updated.
+    Unrecoverable,
 }
 
 /// A control message for the daemon. Serialized per the WebSocket API's
@@ -604,9 +682,213 @@ fn bool_ok(value: &serde_json::Value) -> Option<bool> {
     value.as_bool()
 }
 
-/// The path of the Soloist binary, for diagnostics and tests.
+// ---------------------------------------------------------------------------
+// Managed daemon binary: riddim downloads and updates Soloist itself, so
+// users never install one. Spotify's builds expire 90 days after their build
+// date, so the managed copy is refreshed on age and on the expiry exit code.
+
+/// The managed daemon binary. Lives beside, not inside, the daemon's data
+/// directory: signing out resets the Connect session, not the program.
+fn managed_binary_path() -> Result<PathBuf> {
+    Ok(crate::storage::data_dir()?.join("bin").join("soloist"))
+}
+
+/// Which release archive Spotify publishes for this platform.
+fn archive_name(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("linux", "x86_64") => Some("soloist_release_x86_64.tar.gz"),
+        ("linux", "aarch64") => Some("soloist_release_arm64.tar.gz"),
+        ("linux", "arm") => Some("soloist_release_arm32.tar.gz"),
+        ("macos", "aarch64") => Some("soloist_release_osx_arm64.tar.gz"),
+        _ => None,
+    }
+}
+
+/// True when a managed binary last written before `modified` is old enough
+/// to be worth proactively refreshing.
+fn binary_is_stale(modified: Option<SystemTime>, now: SystemTime) -> bool {
+    let Some(modified) = modified else {
+        return true;
+    };
+    now.duration_since(modified)
+        .is_ok_and(|age| age > REFRESH_AFTER)
+}
+
+fn binary_on_path() -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join("soloist"))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Decides which daemon binary to run: an explicit `RIDDIM_SOLOIST_BIN`
+/// override wins, then riddim's managed copy (refreshed when stale), then
+/// whatever is on `PATH`; downloads when nothing usable is present.
+async fn resolve_binary() -> Result<PathBuf> {
+    if let Some(override_path) = std::env::var_os("RIDDIM_SOLOIST_BIN") {
+        return Ok(PathBuf::from(override_path));
+    }
+    let managed = managed_binary_path()?;
+    if managed.is_file() {
+        let modified = std::fs::metadata(&managed)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        if binary_is_stale(modified, SystemTime::now()) {
+            match tokio::time::timeout(DOWNLOAD_TIMEOUT, refresh_managed(&managed)).await {
+                Ok(Ok(())) => return Ok(managed),
+                Ok(Err(error)) => {
+                    // Offline or the download server is unreachable: the
+                    // existing build may still have lifetime left; the
+                    // expiry exit code is the backstop.
+                    log::warn!("soloist: could not refresh the managed daemon: {error:#}");
+                }
+                Err(_) => log::warn!("soloist: daemon refresh timed out"),
+            }
+        }
+        return Ok(managed);
+    }
+    match tokio::time::timeout(DOWNLOAD_TIMEOUT, refresh_managed(&managed)).await {
+        Ok(Ok(())) => Ok(managed),
+        Ok(Err(error)) => binary_fallback(error).await,
+        Err(_) => binary_fallback(anyhow!("the download timed out")).await,
+    }
+}
+
+/// A fresh download was not possible: run a daemon the user installed
+/// themselves, or fail with instructions.
+async fn binary_fallback(error: anyhow::Error) -> Result<PathBuf> {
+    if let Some(on_path) = binary_on_path() {
+        log::warn!("soloist: managed download failed ({error:#}); using the daemon on PATH");
+        return Ok(on_path);
+    }
+    Err(error.context(
+        "could not install the Spotify Soloist daemon; see \
+         https://developer.spotify.com/documentation/soloist or set RIDDIM_SOLOIST_BIN",
+    ))
+}
+
+/// Downloads the current Soloist release and installs it at `managed`,
+/// atomically: the archive streams to a sibling temporary file, the binary is
+/// extracted to a sibling, smoke-checked, and only then renamed into place.
+async fn refresh_managed(managed: &Path) -> Result<()> {
+    let archive_name = archive_name(std::env::consts::OS, std::env::consts::ARCH)
+        .context("Spotify publishes no Soloist build for this platform")?;
+    let url = format!("{DOWNLOAD_BASE}/{archive_name}");
+    log::info!("soloist: downloading the daemon from {url}");
+    let response = reqwest::Client::new()
+        .get(url)
+        .send()
+        .await
+        .context("could not reach Spotify's Soloist download server")?;
+    let response = response
+        .error_for_status()
+        .context("Spotify's Soloist download server reported an error")?;
+
+    let bin_dir = managed
+        .parent()
+        .context("the managed binary has no parent directory")?;
+    std::fs::create_dir_all(bin_dir)?;
+    let archive_path = bin_dir.join("soloist.download");
+    {
+        let mut archive_file =
+            std::fs::File::create(&archive_path).context("could not write the Soloist download")?;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            archive_file.write_all(&chunk.context("the Soloist download failed mid-transfer")?)?;
+        }
+    }
+
+    let staged = match extract_binary(&archive_path, managed) {
+        Ok(staged) => staged,
+        Err(error) => {
+            let _ = std::fs::remove_file(&archive_path);
+            return Err(error);
+        }
+    };
+    let _ = std::fs::remove_file(&archive_path);
+    smoke_check(&staged).await?;
+    std::fs::rename(&staged, managed).context("could not install the downloaded daemon")?;
+    Ok(())
+}
+
+/// Extracts the `soloist` entry from the release archive to a staging path
+/// next to `dest`, runnable. Entries are top-level; anything else in the
+/// archive (notices, licenses) is ignored.
+fn extract_binary(archive_path: &Path, dest: &Path) -> Result<PathBuf> {
+    let staging = dest.with_file_name("soloist.staging");
+    let _ = std::fs::remove_file(&staging);
+    let archive_file = std::fs::File::open(archive_path)
+        .context("could not read the downloaded Soloist archive")?;
+    let mut archive = Archive::new(GzDecoder::new(archive_file));
+    let mut extracted = false;
+    for entry in archive
+        .entries()
+        .context("the Soloist archive could not be unpacked")?
+    {
+        let mut entry = entry.context("the Soloist archive could not be unpacked")?;
+        if entry
+            .path()
+            .context("the Soloist archive has unreadable entry names")?
+            .file_name()
+            .is_some_and(|name| name == "soloist")
+        {
+            entry
+                .unpack(&staging)
+                .context("could not extract the Soloist daemon")?;
+            make_executable(&staging)?;
+            extracted = true;
+            break;
+        }
+    }
+    if !extracted {
+        return Err(anyhow!(
+            "the Soloist archive did not contain a daemon binary"
+        ));
+    }
+    Ok(staging)
+}
+
+/// Runs the staged binary's version probe: proves it executes on this system
+/// (a missing runtime such as libatomic fails here with a clear message)
+/// before it replaces the current build.
+async fn smoke_check(staged: &Path) -> Result<()> {
+    let probe = tokio::time::timeout(
+        Duration::from_secs(10),
+        ProcessCommand::new(staged).arg("--version").output(),
+    )
+    .await
+    .context("the downloaded Soloist daemon did not answer --version")?;
+    let output = probe.map_err(|error| {
+        anyhow!(
+            "the downloaded Soloist daemon failed to run ({error}); a system \
+             runtime such as libatomic may be missing"
+        )
+    })?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "the downloaded Soloist daemon exited with {:?} on --version",
+            output.status
+        ));
+    }
+    Ok(())
+}
+
+fn make_executable(path: &Path) -> Result<()> {
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(permissions.mode() | 0o755);
+    std::fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+/// Describes which daemon binary riddim would run, for diagnostics.
 pub fn binary_hint() -> String {
-    std::env::var("RIDDIM_SOLOIST_BIN").unwrap_or_else(|_| "soloist".to_owned())
+    if let Some(override_path) = std::env::var_os("RIDDIM_SOLOIST_BIN") {
+        return format!("override at {}", override_path.to_string_lossy());
+    }
+    match managed_binary_path() {
+        Ok(managed) if managed.is_file() => format!("managed at {}", managed.display()),
+        Ok(_) => "not managed yet; a PATH copy would be used".to_owned(),
+        Err(_) => "data directory unavailable".to_owned(),
+    }
 }
 
 /// Removes the daemon's data directory, ending its stored Spotify Connect
@@ -735,5 +1017,108 @@ mod tests {
         .unwrap();
         assert_eq!(entity.uri, "");
         assert_eq!(entity.decorations.identity, None);
+    }
+
+    #[test]
+    fn release_archives_map_to_supported_platforms() {
+        assert_eq!(
+            archive_name("linux", "x86_64"),
+            Some("soloist_release_x86_64.tar.gz")
+        );
+        assert_eq!(
+            archive_name("linux", "aarch64"),
+            Some("soloist_release_arm64.tar.gz")
+        );
+        assert_eq!(
+            archive_name("macos", "aarch64"),
+            Some("soloist_release_osx_arm64.tar.gz")
+        );
+        assert_eq!(archive_name("linux", "wasm32"), None);
+        assert_eq!(archive_name("windows", "x86_64"), None);
+    }
+
+    #[test]
+    fn managed_binaries_go_stale_after_the_refresh_window() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        assert!(binary_is_stale(None, now));
+        assert!(!binary_is_stale(Some(now - Duration::from_secs(10)), now));
+        // The window sits well inside the 90-day build expiry.
+        assert!(!binary_is_stale(
+            Some(now - REFRESH_AFTER + Duration::from_secs(1)),
+            now
+        ));
+        assert!(binary_is_stale(
+            Some(now - REFRESH_AFTER - Duration::from_secs(1)),
+            now
+        ));
+    }
+
+    #[test]
+    fn the_daemon_is_extracted_runnable_from_the_release_archive() {
+        // A stand-in release archive: the `soloist` binary plus a notice file
+        // that must be ignored.
+        let mut archive_buffer = Vec::new();
+        {
+            let encoder =
+                flate2::write::GzEncoder::new(&mut archive_buffer, flate2::Compression::default());
+            let mut builder = tar::Builder::new(encoder);
+            let payload = b"#!/bin/sh\necho soloist 0.0.0\n";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "soloist", payload.as_slice())
+                .unwrap();
+            let mut header = tar::Header::new_gnu();
+            header.set_size(4);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "NOTICE", &b"SPOT"[..])
+                .unwrap();
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("riddim-soloist-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive_path = dir.join("release.tar.gz");
+        std::fs::write(&archive_path, &archive_buffer).unwrap();
+        let dest = dir.join("bin").join("soloist");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+
+        let staged = extract_binary(&archive_path, &dest).unwrap();
+        assert_eq!(staged, dest.with_file_name("soloist.staging"));
+        assert!(!staged.exists() || std::fs::metadata(&staged).is_ok());
+        let contents = std::fs::read(&staged).unwrap();
+        assert_eq!(contents, b"#!/bin/sh\necho soloist 0.0.0\n");
+        // The archive shipped a non-executable mode; the staged copy must be
+        // made runnable before it is installed.
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_ne!(
+            std::fs::metadata(&staged).unwrap().permissions().mode() & 0o111,
+            0
+        );
+        // The notice file did not leak into the install directory.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2); // release.tar.gz, bin/
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Live check against Spotify's download server; run explicitly with
+    /// `cargo test -- --ignored soloist_downloads_and_installs`.
+    #[tokio::test]
+    #[ignore = "downloads Spotify's release archive"]
+    async fn soloist_downloads_and_installs() {
+        let dir = std::env::temp_dir().join(format!("riddim-soloist-live-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let managed = dir.join("soloist");
+        refresh_managed(&managed).await.unwrap();
+        assert!(managed.is_file());
+        let version = tokio::process::Command::new(&managed)
+            .arg("--version")
+            .output()
+            .await
+            .unwrap();
+        assert!(version.status.success());
+        println!("installed: {}", String::from_utf8_lossy(&version.stdout));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -72,14 +72,18 @@ daemon, and clears its pairing. To revoke Riddim entirely, use
 [Spotify's app management page](https://www.spotify.com/us/account/apps/)
 — remove your developer app and revoke its Soloist key in the dashboard.
 
-## Installing the Soloist daemon
+## The Soloist daemon
 
-Riddim looks for a `soloist` binary on your `PATH`; set `RIDDIM_SOLOIST_BIN`
-to point at a specific one. Soloist ships from Spotify's developer site for
-x86-64 Linux and Apple Silicon — download the archive for your platform and
-put the binary somewhere on `PATH`. Soloist builds expire 90 days after
-their build date; an expired daemon refuses to start and Riddim tells you to
-update it.
+Playback runs on Soloist, Spotify's official headless player, as a separate
+daemon that Riddim supervises. You do not install it: before playback starts,
+Riddim downloads the build for your platform from Spotify's own download
+server into its data directory, refreshes it well before Spotify's 90-day
+build lifetime runs out, and replaces it automatically if a build ever
+expires.
+
+To run a daemon binary you manage yourself — a custom setup, or pinning a
+version — set `RIDDIM_SOLOIST_BIN` to its path (or put `soloist` on `PATH` as
+a fallback); Riddim prefers the override over its managed copy.
 
 ## Troubleshooting
 
@@ -114,10 +118,11 @@ itself over local network discovery, and its port changes on every start:
   logs for `soloist:` lines; a daemon that exits with code 10 has an expired
   build and needs updating.
 
-**The daemon fails to start with a missing `libatomic.so.1`.** Some Soloist
-builds need it on distributions that ship GCC's runtime split out. Install
-`libatomic` (Fedora: `sudo dnf install libatomic`) or point
-`LD_LIBRARY_PATH` at a copy of the library.
+**The daemon fails to start with a missing `libatomic.so.1`.** Soloist needs
+it on distributions that ship GCC's runtime split out, however the daemon was
+installed. Install `libatomic` (Fedora: `sudo dnf install libatomic`). Riddim
+checks a freshly downloaded daemon before installing it, so this surfaces as
+a clear setup error rather than a mystery.
 
 **Approved everything but no sound.** Check that a normal browser or the
 desktop Spotify app can play, then look for an ALSA/PipeWire default sink

@@ -10,6 +10,7 @@ async-channel = "2.5"
 base64 = "0.22"
 directories = "6.0"
 env_logger = "0.11"
+flate2 = "1"
 futures = "0.3"
 gpui-kit = "0.7.0"
 # keyring's default `v1` mode covers macOS Keychain, the Windows credential
@@ -35,6 +36,8 @@ rust-embed = { version = "8", features = ["debug-embed"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Managed Soloist daemon installs: the release archive is a gzipped tar.
+tar = "0.4"
 tokio = { version = "1.53", features = ["macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 # WebSocket client for the Soloist playback daemon; plain ws:// on loopback,
 # so no TLS feature is needed.

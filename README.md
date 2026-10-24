@@ -36,11 +36,11 @@ keeps local state.
 
 ## Requirements
 
-Linux with Spotify Premium, and a [Soloist binary](https://developer.spotify.com/documentation/soloist)
-on your `PATH` (or `RIDDIM_SOLOIST_BIN` pointing at one). Playback goes
-through ALSA, which PipeWire and PulseAudio servers provide. A desktop
-keyring (GNOME Keyring, KWallet, or another Secret Service provider) stores
-Spotify credentials. A Vulkan driver renders the interface.
+Linux with Spotify Premium. Riddim downloads Spotify's Soloist playback
+daemon by itself and keeps it updated. Playback goes through ALSA, which
+PipeWire and PulseAudio servers provide. A desktop keyring (GNOME Keyring,
+KWallet, or another Secret Service provider) stores Spotify credentials. A
+Vulkan driver renders the interface.
 
 ## Set Up Spotify
 
