@@ -275,14 +275,22 @@ impl RenderOnce for TrackRow {
     }
 }
 
-/// One playlist in a list. Stateless, like `TrackRow`.
+/// One playlist in a list. Stateless, like `TrackRow`. The playlists pane
+/// treats activating a row as playing the playlist: Spotify's Development
+/// Mode restriction keeps many followed playlists unreadable through the
+/// Web API, but the daemon can always resolve the context itself.
 #[derive(IntoElement)]
 pub(super) struct PlaylistRow {
     index: usize,
     playlist: model::Playlist,
     palette: RiddimPalette,
     image_cache: Entity<image_cache::BoundedImageCache>,
+    /// This playlist is the context the daemon is progressing through.
+    is_current: bool,
+    /// ...and it is actively playing (the row button then offers pause).
+    playing: bool,
     on_open: Option<RowCallback>,
+    on_play: Option<RowCallback>,
 }
 
 /// One saved podcast show in a list. Stateless, like `PlaylistRow`.
@@ -380,7 +388,10 @@ impl PlaylistRow {
             playlist,
             palette,
             image_cache,
+            is_current: false,
+            playing: false,
             on_open: None,
+            on_play: None,
         }
     }
 
@@ -391,16 +402,41 @@ impl PlaylistRow {
         self.on_open = Some(Box::new(handler));
         self
     }
+
+    pub(super) fn on_play(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_play = Some(Box::new(handler));
+        self
+    }
+
+    pub(super) fn current(mut self, is_current: bool) -> Self {
+        self.is_current = is_current;
+        self
+    }
+
+    pub(super) fn playing(mut self, playing: bool) -> Self {
+        self.playing = playing;
+        self
+    }
 }
 
 impl RenderOnce for PlaylistRow {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let palette = self.palette;
+        let row_group: SharedString = format!(
+            "spotify-playlist-row:{}:{}",
+            self.playlist.source_id, self.index
+        )
+        .into();
         let detail = format!(
             "{} tracks · {}",
             self.playlist.track_count, self.playlist.owner
         );
         components::button(palette, ("spotify-playlist", self.index))
+            .test_support()
+            .group(row_group.clone())
             .w_full()
             .h(tokens::PLAYLIST_ROW_HEIGHT)
             .px_3()
@@ -409,6 +445,11 @@ impl RenderOnce for PlaylistRow {
             .rounded_none()
             .border_t_1()
             .border_color(rgb(palette.border))
+            .bg(rgb(if self.is_current {
+                palette.selection
+            } else {
+                palette.surface
+            }))
             .hover(|style| style.bg(rgb(palette.surface_hover)))
             .child(components::artwork(
                 palette,
@@ -435,6 +476,31 @@ impl RenderOnce for PlaylistRow {
                             .text_color(rgb(palette.text_muted))
                             .child(detail),
                     ),
+            )
+            .child(div().flex_1())
+            .child(
+                components::icon_button_sized(
+                    palette,
+                    ("playlist-play", self.index),
+                    if self.playing {
+                        RiddimIcon::Pause
+                    } else {
+                        RiddimIcon::Play
+                    },
+                    tokens::CONTROL_ICON,
+                )
+                .size_8()
+                .when(!self.is_current, |button| {
+                    button
+                        .invisible()
+                        .group_hover(row_group, |style| style.visible())
+                })
+                .when_some(self.on_play, |button, handler| {
+                    button.on_click(move |event, window, cx| {
+                        cx.stop_propagation();
+                        handler(event, window, cx);
+                    })
+                }),
             )
             .when_some(self.on_open, |row, handler| row.on_click(handler))
     }

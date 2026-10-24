@@ -66,4 +66,15 @@ if [ "${1:-}" = "build" ]; then
   mv -f ~/.local/bin/riddim.new ~/.local/bin/riddim
   rm -rf ~/.local/bin/riddim-libs
   cp -r "$libs" ~/.local/bin/riddim-libs
+  # Desktop entry and icon, so launchers and the taskbar show riddim's mark
+  # (the window's Wayland app_id / X11 WM_CLASS is the file's stem). The
+  # entry's Exec is rewritten to the installed binary's absolute path,
+  # since launchers do not expand ~ or rely on PATH.
+  mkdir -p ~/.local/share/applications ~/.local/share/icons/hicolor/scalable/apps
+  sed "s|^Exec=.*|Exec=$HOME/.local/bin/riddim|" \
+    packaging/io.github.letdown2491.riddim.desktop \
+    > ~/.local/share/applications/io.github.letdown2491.riddim.desktop
+  cp -f assets/riddim-icon.svg \
+    ~/.local/share/icons/hicolor/scalable/apps/io.github.letdown2491.riddim.svg
+  update-desktop-database ~/.local/share/applications 2>/dev/null || true
 fi

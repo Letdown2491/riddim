@@ -266,22 +266,30 @@ impl Render for TrackList {
     }
 }
 
-/// A virtualized table of playlists.
+/// A virtualized table of playlists. Activating a row plays the playlist
+/// through the daemon; each row carries a play/pause button like the liked
+/// songs header's.
 pub(super) struct PlaylistList {
     /// Set by `show`, which always runs before the list is first painted.
     id: Option<ElementId>,
     playlists: Arc<[model::Playlist]>,
+    player: Entity<player::Player>,
     image_cache: Entity<image_cache::BoundedImageCache>,
+    _player_subscription: Subscription,
 }
 
 impl EventEmitter<PageEvent> for PlaylistList {}
 
 impl PlaylistList {
-    pub(super) fn new(cx: &mut App) -> Self {
+    pub(super) fn new(cx: &mut Context<Self>) -> Self {
+        let player = services::AppServices::player(cx);
+        let player_subscription = cx.observe(&player, |_, _, cx| cx.notify());
         Self {
             id: None,
             playlists: Arc::default(),
+            player,
             image_cache: services::AppServices::image_cache(cx),
+            _player_subscription: player_subscription,
         }
     }
 
@@ -327,15 +335,40 @@ impl Render for PlaylistList {
                         range
                             .filter_map(|index| {
                                 playlists.get(index).cloned().map(|playlist| {
-                                    let selected = playlist.clone();
+                                    let play_uri =
+                                        format!("spotify:playlist:{}", playlist.source_id);
+                                    let is_current = this.player.read(cx).is_context(&play_uri);
+                                    let playing =
+                                        this.player.read(cx).is_playing_context(&play_uri);
+                                    let open_uri = play_uri.clone();
                                     track_row::PlaylistRow::new(
                                         index,
                                         playlist,
                                         palette,
                                         this.image_cache.clone(),
                                     )
-                                    .on_open(cx.listener(move |_, _, _, cx| {
-                                        cx.emit(PageEvent::OpenPlaylist(selected.clone()));
+                                    .current(is_current)
+                                    .playing(playing)
+                                    .on_open(cx.listener(move |this, _, _, cx| {
+                                        // Activating the row plays the playlist; the
+                                        // daemon resolves the context itself, so this
+                                        // works even where the Web API cannot list
+                                        // the tracks. The playing playlist's own row
+                                        // ignores clicks, as track rows do.
+                                        this.player.update(cx, |player, cx| {
+                                            if !player.is_playing_context(&open_uri) {
+                                                player.play_spotify_context(open_uri.clone(), cx);
+                                            }
+                                        });
+                                    }))
+                                    .on_play(cx.listener(move |this, _, _, cx| {
+                                        this.player.update(cx, |player, cx| {
+                                            if player.is_context(&play_uri) {
+                                                player.toggle(cx);
+                                            } else {
+                                                player.play_spotify_context(play_uri.clone(), cx);
+                                            }
+                                        });
                                     }))
                                     .into_any_element()
                                 })

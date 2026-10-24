@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Riddim
+GenericName=Music Player
+Comment=Spotify music and podcasts
+Exec=riddim
+Icon=io.github.letdown2491.riddim
+Terminal=false
+Categories=Audio;Music;Player;AudioVideo;
+StartupWMClass=io.github.letdown2491.riddim

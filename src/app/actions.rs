@@ -268,10 +268,6 @@ impl Workspace {
         match event {
             page::PageEvent::Loaded => self.last_error = None,
             page::PageEvent::Failed(error) => self.last_error = Some(error.clone()),
-            page::PageEvent::OpenPlaylist(playlist) => {
-                self.load_playlist(playlist.clone(), cx);
-                self.open_playlist(origin, cx);
-            }
             page::PageEvent::OpenArtist(artist) => self.open_artist(artist.clone(), origin, cx),
             page::PageEvent::OpenAlbum(album) => self.open_album(album.clone(), origin, cx),
             page::PageEvent::OpenShow(show) => self.open_show(show.clone(), origin, cx),

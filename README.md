@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/riddim-mark.svg" width="96" height="96" alt="Riddim logo">
+  <img src="assets/riddim-icon.svg" width="96" height="96" alt="Riddim logo">
 </p>
 
 <h1 align="center">Riddim</h1>

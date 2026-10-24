@@ -102,6 +102,7 @@ pub(super) fn open_main_window(cx: &mut App) {
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(720.), px(600.))),
+            app_id: Some(crate::app::bootstrap::APP_IDENTITY.into()),
             is_resizable: true,
             titlebar: Some(gpui_kit::TitlebarOptions {
                 title: Some("Riddim".into()),
@@ -135,6 +136,7 @@ pub(super) fn ensure_onboarding_window(cx: &mut App) {
     let opened = gpui_kit::open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            app_id: Some(crate::app::bootstrap::APP_IDENTITY.into()),
             is_resizable: false,
             titlebar: Some(gpui_kit::TitlebarOptions {
                 title: Some("Riddim".into()),

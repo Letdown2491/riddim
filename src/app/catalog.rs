@@ -56,7 +56,7 @@ impl EventEmitter<PageEvent> for SearchPage {}
 impl SearchPage {
     pub(super) fn new(backend: BackendHandle, cx: &mut Context<Self>) -> Self {
         let track_list = cx.new(|cx| TrackList::new(cx));
-        let playlist_list = cx.new(|cx| PlaylistList::new(cx));
+        let playlist_list = cx.new(PlaylistList::new);
         Self {
             backend,
             query: String::new(),

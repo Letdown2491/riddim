@@ -17,6 +17,10 @@ pub(super) struct Player {
     queue: Arc<[model::Track]>,
     playing: bool,
     loading: bool,
+    /// The Spotify context URI riddim handed to the daemon as a whole
+    /// (a playlist), while the daemon is still progressing through it.
+    /// Drives the playlists pane's play/pause buttons.
+    context_uri: Option<String>,
     /// Position and play state to reapply once a reconnected player is ready.
     restore: Option<(u32, bool)>,
     /// The current track still owes a history entry once it plays.
@@ -38,6 +42,7 @@ impl Player {
             queue: Arc::default(),
             playing: false,
             loading: false,
+            context_uri: None,
             restore: None,
             history_pending: false,
             clock: playback_clock::PlaybackClock::new(now),
@@ -103,6 +108,17 @@ impl Player {
         self.now_playing.as_ref().is_some_and(|playing| {
             playing.provider == track.provider && playing.source_id == track.source_id
         })
+    }
+
+    /// True while the daemon is progressing through `spotify_uri` as a whole
+    /// context riddim handed it (paused or playing).
+    pub(super) fn is_context(&self, spotify_uri: &str) -> bool {
+        self.context_uri.as_deref() == Some(spotify_uri)
+    }
+
+    /// [`Self::is_context`], and the context is actively playing.
+    pub(super) fn is_playing_context(&self, spotify_uri: &str) -> bool {
+        self.is_context(spotify_uri) && self.playing
     }
 
     fn live_track_matches(&self, spotify_uri: &str) -> bool {
@@ -202,6 +218,7 @@ impl Player {
     ) -> bool {
         let started = self.send(BackendCommand::PlayContext { tracks, index }, cx);
         if started {
+            self.context_uri = None;
             self.clock.reset(0, cx.background_executor().now());
             self.set_playback(false, cx);
             self.loading = true;
@@ -218,8 +235,14 @@ impl Player {
         spotify_uri: String,
         cx: &mut Context<Self>,
     ) -> bool {
-        let started = self.send(BackendCommand::PlaySpotifyContext { spotify_uri }, cx);
+        let started = self.send(
+            BackendCommand::PlaySpotifyContext {
+                spotify_uri: spotify_uri.clone(),
+            },
+            cx,
+        );
         if started {
+            self.context_uri = Some(spotify_uri);
             self.now_playing = None;
             self.clock.reset(0, cx.background_executor().now());
             self.set_playback(false, cx);
@@ -341,6 +364,7 @@ impl Player {
         self.now_playing = None;
         self.context = Arc::default();
         self.queue = Arc::default();
+        self.context_uri = None;
         self.set_playback(false, cx);
         self.loading = false;
         self.restore = None;
@@ -403,6 +427,8 @@ impl Player {
                 // starts this track over (or from wherever the seeker goes).
                 self.clock.reset(0, cx.background_executor().now());
                 self.saved_position_ms = 0;
+                // The daemon-owned context ran out of music.
+                self.context_uri = None;
             }
             BackendEvent::Playing { spotify_uri } => {
                 if self.restore.is_none() && self.live_track_matches(&spotify_uri) {
@@ -453,6 +479,7 @@ impl Player {
                 position_ms,
             } => {
                 self.adopt_context(current, next);
+                self.context_uri = None;
                 self.clock
                     .reset(position_ms, cx.background_executor().now());
                 self.saved_position_ms = position_ms;

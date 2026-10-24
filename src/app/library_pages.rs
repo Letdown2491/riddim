@@ -151,7 +151,7 @@ impl EventEmitter<PageEvent> for PlaylistsPage {}
 
 impl PlaylistsPage {
     pub(super) fn new(cx: &mut Context<Self>) -> Self {
-        let playlists = cx.new(|cx| track_list::PlaylistList::new(cx));
+        let playlists = cx.new(track_list::PlaylistList::new);
         Self {
             library: services::AppServices::library(cx),
             _playlists_subscription: page::forward(&playlists, cx),

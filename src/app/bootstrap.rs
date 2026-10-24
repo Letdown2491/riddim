@@ -1,5 +1,10 @@
 use super::*;
 
+/// The desktop identity: the desktop entry and icon are installed under this
+/// name, so Wayland's app_id and X11's WM_CLASS must match it for the
+/// taskbar/dock to show riddim's icon.
+pub(super) const APP_IDENTITY: &str = "io.github.letdown2491.riddim";
+
 pub(super) fn run() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", "info"))
         .format_timestamp_millis()
@@ -33,6 +38,9 @@ pub(super) fn run() {
         cx.set_http_client(Arc::new(
             http::ImageHttpClient::new().expect("could not configure image HTTP client"),
         ));
+        // The Wayland app_id and X11 WM_CLASS: compositors match it against
+        // the desktop entry to pick the taskbar icon.
+        cx.set_app_identity(APP_IDENTITY, "Riddim");
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &CheckForUpdates, cx| updater::check_for_updates(cx));
         services::AppServices::init(cx, lifecycle, preferences_store, preferences);
