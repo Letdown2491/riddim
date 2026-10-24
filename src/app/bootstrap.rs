@@ -3,7 +3,7 @@ use super::*;
 /// The desktop identity: the desktop entry and icon are installed under this
 /// name, so Wayland's app_id and X11's WM_CLASS must match it for the
 /// taskbar/dock to show riddim's icon.
-pub(super) const APP_IDENTITY: &str = "io.github.letdown2491.riddim";
+pub(super) const APP_IDENTITY: &str = "io.github.Letdown2491.riddim";
 
 pub(super) fn run() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", "info"))

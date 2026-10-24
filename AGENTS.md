@@ -77,8 +77,9 @@ Spotify Connect pairing. If you change scopes, ports, or token storage in
 
 The app is riddim. The word "cadence" also means a beat pattern — a few
 comments use it in that English sense (for example "refresh cadence"); do not
-rename those. The logo and screenshots still carry cadence's mark and
-branding; replace them with riddim art when available.
+rename those. The logo and screenshots are riddim art now
+(`assets/riddim-icon.svg`, `riddim-mark.png`, `riddim-liked.png`); no
+cadence-branded assets remain in the tree.
 
 ## Non-Interactive Shell Commands
 

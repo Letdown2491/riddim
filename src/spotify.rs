@@ -31,7 +31,11 @@ use crate::{
 };
 
 const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
-const KEYCHAIN_SERVICE: &str = "io.github.letdown2491.riddim";
+const KEYCHAIN_SERVICE: &str = "io.github.Letdown2491.riddim";
+/// The service name before the app ID gained its capital; tokens stored
+/// under it are adopted on first load so the rename does not sign the user
+/// out.
+const KEYCHAIN_SERVICE_LEGACY: &str = "io.github.letdown2491.riddim";
 const KEYCHAIN_ACCOUNT: &str = "oauth-token";
 const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const LOGGED_OUT_CREDENTIAL: &str = "riddim-logged-out";
@@ -1083,13 +1087,33 @@ impl TokenVault {
         Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT).map_err(Into::into)
     }
 
+    fn legacy_entry() -> Result<Entry> {
+        Entry::new(KEYCHAIN_SERVICE_LEGACY, KEYCHAIN_ACCOUNT).map_err(Into::into)
+    }
+
     fn load() -> Result<Option<Token>> {
         match Self::entry()?.get_password() {
             Ok(json) if json == LOGGED_OUT_CREDENTIAL => Ok(None),
             Ok(json) => Ok(Some(serde_json::from_str(&json)?)),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring::Error::NoEntry) => Self::load_legacy(),
             Err(error) => Err(anyhow!(error)),
         }
+    }
+
+    /// The app ID has changed twice (dev.twoducks.riddim, then the lowercase
+    /// io.github.letdown2491.riddim); a token stored under a previous service
+    /// name is invisible to lookups under the current one. Adopt it rather
+    /// than reporting the user signed out.
+    fn load_legacy() -> Result<Option<Token>> {
+        let json = match Self::legacy_entry()?.get_password() {
+            Ok(json) if json == LOGGED_OUT_CREDENTIAL => return Ok(None),
+            Ok(json) => json,
+            Err(keyring::Error::NoEntry) => return Ok(None),
+            Err(error) => return Err(anyhow!(error)),
+        };
+        Self::entry()?.set_password(&json)?;
+        log::info!("spotify: adopted the token stored under the previous service name");
+        Ok(Some(serde_json::from_str(&json)?))
     }
 
     fn save(token: &Token) -> Result<()> {

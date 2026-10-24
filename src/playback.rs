@@ -17,10 +17,11 @@ use tokio::sync::mpsc;
 
 use crate::{credential_worker, soloist};
 
-const KEYCHAIN_SERVICE: &str = "io.github.letdown2491.riddim";
-/// The service name before the app was renamed; keys stored under it are
-/// adopted on first load so a rename does not orphan stored credentials.
-const KEYCHAIN_SERVICE_LEGACY: &str = "dev.twoducks.riddim";
+const KEYCHAIN_SERVICE: &str = "io.github.Letdown2491.riddim";
+/// The service name before the app ID gained its capital; keys stored under
+/// it are adopted on first load so a rename does not orphan stored
+/// credentials.
+const KEYCHAIN_SERVICE_LEGACY: &str = "io.github.letdown2491.riddim";
 const KEYCHAIN_ACCOUNT_API_KEY: &str = "soloist-api-key";
 
 /// The control surface the queue machine in `backend.rs` drives.
@@ -484,9 +485,10 @@ pub(crate) async fn load_soloist_api_key() -> Result<Option<String>> {
     if let Some(key) = credential_worker::run(|| read_key(api_key_entry()?)).await? {
         return Ok(Some(key));
     }
-    // The app was once named dev.twoducks.riddim; a key stored under the
-    // previous service name is invisible to lookups under the current one.
-    // Adopt it rather than reporting the key missing.
+    // The app ID has changed twice (dev.twoducks.riddim, then the lowercase
+    // io.github.letdown2491.riddim); a key stored under a previous service
+    // name is invisible to lookups under the current one. Adopt it rather
+    // than reporting the key missing.
     if let Some(key) = credential_worker::run(|| read_key(legacy_api_key_entry()?)).await? {
         save_soloist_api_key(key.clone()).await?;
         log::info!("playback: adopted the Soloist API key stored under the previous service name");

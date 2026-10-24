@@ -13,7 +13,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-black.svg" alt="MIT license"></a>
 </p>
 
-![Riddim showing the Liked Songs library](assets/cadence.webp)
+![Riddim showing the Liked Songs library](assets/riddim-liked.png)
 
 ## Features
 
