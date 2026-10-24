@@ -91,7 +91,7 @@ impl Daemon {
     async fn spawn(&mut self) -> Result<()> {
         let child = ProcessCommand::new(&self.binary_path)
             .arg("--device-name")
-            .arg("riddim")
+            .arg("Riddim")
             .arg("--api-key")
             .arg(&self.api_key)
             // Port 0 lets the OS pick a free port; the daemon writes the real
@@ -299,6 +299,17 @@ async fn connection_loop(
                 log::info!("soloist: WebSocket connected");
                 backoff = RECONNECT_MIN;
                 let (mut sink, mut stream) = futures::StreamExt::split(stream);
+                // Ask for the daemon's current state up front, so riddim can
+                // follow an in-progress session instead of assuming the
+                // engine came up empty.
+                if sink
+                    .send(Message::text(Command::GetState.to_message()))
+                    .await
+                    .is_err()
+                {
+                    let _ = connected.send(false);
+                    continue;
+                }
                 let closed = loop {
                     tokio::select! {
                         command = commands.recv() => {
@@ -497,9 +508,15 @@ pub struct Decorations {
     pub identity: Option<Identity>,
     #[serde(default)]
     pub playback: Option<PlaybackDecorations>,
+    #[serde(default)]
+    pub visual_identity: Option<VisualIdentity>,
+    #[serde(default)]
+    pub creators: Vec<Creator>,
+    #[serde(default)]
+    pub parent: Option<Parent>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct Identity {
     #[serde(default)]
     pub name: Option<String>,
@@ -509,6 +526,33 @@ pub struct Identity {
 pub struct PlaybackDecorations {
     #[serde(default)]
     pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct VisualIdentity {
+    #[serde(default)]
+    pub cover: Vec<CoverImage>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct CoverImage {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub size: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct Creator {
+    /// Boxed: entities nest decorations, which nest creators.
+    #[serde(default)]
+    pub entity: Option<Box<Entity>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct Parent {
+    #[serde(default)]
+    pub entity: Option<Box<Entity>>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
@@ -811,7 +855,21 @@ async fn refresh_managed(managed: &Path) -> Result<()> {
         return Err(error);
     }
     std::fs::rename(&staged, managed).context("could not install the downloaded daemon")?;
+    stamp_install_time(managed);
     Ok(())
+}
+
+/// Release archives carry a 1999 tar timestamp, which the freshness check
+/// would read as long expired and answer with a re-download on every launch;
+/// stamp the install time so the refresh window starts at installation.
+fn stamp_install_time(managed: &Path) {
+    let stamped = std::fs::OpenOptions::new()
+        .write(true)
+        .open(managed)
+        .and_then(|file| file.set_times(std::fs::FileTimes::new().set_modified(SystemTime::now())));
+    if let Err(error) = stamped {
+        log::warn!("soloist: could not stamp the daemon install time: {error}");
+    }
 }
 
 /// Extracts the `soloist` entry from the release archive to a staging path
@@ -1018,6 +1076,55 @@ mod tests {
     fn unknown_event_types_are_dropped_not_fatal() {
         assert!(parse_event(r#"{"type":"brand_new_event","x":1}"#).is_none());
         assert!(parse_event("not json at all").is_none());
+    }
+
+    #[test]
+    fn entity_decorations_cover_creators_parents_and_covers() {
+        let entity: Entity = serde_json::from_value(json!({
+            "uri": "spotify:track:2JRo0gjbX4GrCqBYdRohoo",
+            "entity_type": "track",
+            "decorations": {
+                "identity": { "name": "My Song" },
+                "visual_identity": { "cover": [
+                    { "url": "https://i.scdn.co/image/ab67616d00001e02...", "size": "large" }
+                ]},
+                "parent": { "entity": {
+                    "uri": "spotify:album:4aawyAB9vmqN3uQ7FjRGTy",
+                    "entity_type": "album",
+                    "decorations": { "identity": { "name": "Album Name" } }
+                }},
+                "creators": [ { "entity": {
+                    "uri": "spotify:artist:artist",
+                    "entity_type": "artist",
+                    "decorations": { "identity": { "name": "Artist Name" } }
+                }}],
+                "playback": { "duration_ms": 210000, "content_ratings": ["explicit"] }
+            }
+        }))
+        .unwrap();
+        let decorations = entity.decorations;
+        assert_eq!(
+            decorations.identity.as_ref().unwrap().name.as_deref(),
+            Some("My Song")
+        );
+        assert_eq!(
+            decorations.playback.as_ref().unwrap().duration_ms,
+            Some(210000)
+        );
+        assert_eq!(
+            decorations.visual_identity.as_ref().unwrap().cover[0].url,
+            "https://i.scdn.co/image/ab67616d00001e02..."
+        );
+        let parent = decorations
+            .parent
+            .as_ref()
+            .unwrap()
+            .entity
+            .as_deref()
+            .unwrap();
+        assert_eq!(parent.entity_type, "album");
+        let creator = decorations.creators[0].entity.as_deref().unwrap();
+        assert_eq!(creator.entity_type, "artist");
     }
 
     #[test]

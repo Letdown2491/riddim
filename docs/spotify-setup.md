@@ -44,7 +44,7 @@ The library connection needs a Client ID that belongs to you:
    Approve it. Spotify redirects to `127.0.0.1:8888/callback`, which Riddim
    catches and closes out.
 3. Your library loads. Riddim starts the Soloist daemon in the background;
-   it registers itself as a Spotify Connect device named **riddim**.
+   it registers itself as a Spotify Connect device named **Riddim**.
 4. Pair it once: in any Spotify app (phone, desktop, web), start playing a
    track and choose **riddim** in the device picker. Playback then follows
    Riddim's queue.
@@ -123,6 +123,18 @@ it on distributions that ship GCC's runtime split out, however the daemon was
 installed. Install `libatomic` (Fedora: `sudo dnf install libatomic`). Riddim
 checks a freshly downloaded daemon before installing it, so this surfaces as
 a clear setup error rather than a mystery.
+
+**A playlist says Spotify "only lets Development Mode apps read playlists you
+own or collaborate on."** In February 2026 Spotify stopped Development Mode
+apps — every personal developer app — from reading the contents of playlists
+you follow rather than own; only the metadata still loads. Riddim works
+around this for playback: the **Play** button hands the whole playlist to
+Riddim's player daemon, which reads it through its own Spotify Connect
+session (the track list stays hidden, and what is playing appears in the
+player bar as the daemon reports it). Your own and collaborative playlists
+load normally. Full playlist reading is only available to apps Spotify
+approves for Extended Quota Mode; you can request it from your app's page in
+the [developer dashboard](https://developer.spotify.com/dashboard).
 
 **Approved everything but no sound.** Check that a normal browser or the
 desktop Spotify app can play, then look for an ALSA/PipeWire default sink

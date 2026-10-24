@@ -13,8 +13,12 @@ use anyhow::{Context as _, Result, anyhow};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 use crate::{
-    model::{Album, Artist, CachedLibrary, LibraryFingerprint, Playlist, Show, Track, UserProfile},
+    model::{
+        Album, AlbumRef, Artist, ArtistRef, CachedLibrary, LibraryFingerprint, MediaKind, Playlist,
+        Provider, Show, Track, UserProfile,
+    },
     playback::{Playback, PlaybackEvent, delete_soloist_api_key, save_soloist_api_key},
+    soloist,
     spotify::{
         ClientIdSource, Spotify, SpotifyConfiguration, resolve_configuration, valid_client_id,
     },
@@ -106,23 +110,13 @@ impl BlockingStore {
         self.call(|store| store.playback_state()).await
     }
 
-    async fn local_state(&self) -> Result<(Vec<Track>, Vec<Playlist>, Vec<Track>)> {
-        self.call(|store| {
-            Ok((
-                store.favorites()?,
-                store.pinned_playlists()?,
-                store.recent_tracks(100)?,
-            ))
-        })
-        .await
+    async fn local_state(&self) -> Result<(Vec<Playlist>, Vec<Track>)> {
+        self.call(|store| Ok((store.pinned_playlists()?, store.recent_tracks(100)?)))
+            .await
     }
 
     async fn cached_library(&self) -> Result<CachedLibrary> {
         self.call(|store| store.cached_library()).await
-    }
-
-    async fn favorites(&self) -> Result<Vec<Track>> {
-        self.call(|store| store.favorites()).await
     }
 
     async fn remove_spotify_client_id(&self) -> Result<()> {
@@ -186,11 +180,6 @@ impl BlockingStore {
 
     async fn update_playback_position(&self, position_ms: u32) -> Result<()> {
         self.call(move |store| store.update_playback_position(position_ms))
-            .await
-    }
-
-    async fn set_favorite(&self, track: Track, favorite: bool) -> Result<()> {
-        self.call(move |store| store.set_favorite(&track, favorite))
             .await
     }
 
@@ -309,6 +298,13 @@ pub enum BackendCommand {
         tracks: Vec<Track>,
         index: usize,
     },
+    /// Starts a whole Spotify context (playlist or album URI) on the daemon,
+    /// which resolves its contents through its own Connect session. Used when
+    /// the Web API refuses to hand out the contents (Spotify's Development
+    /// Mode restriction on followed playlists).
+    PlaySpotifyContext {
+        spotify_uri: String,
+    },
     PlayNext(Track),
     AppendToQueue(Track),
     /// The track started playing, so it belongs in the listening history.
@@ -316,10 +312,6 @@ pub enum BackendCommand {
     RestorePlayback {
         position_ms: u32,
         playing: bool,
-    },
-    SetFavorite {
-        track: Track,
-        favorite: bool,
     },
     SetPlaylistPinned {
         playlist: Playlist,
@@ -387,7 +379,6 @@ pub enum BackendEvent {
         generation: u64,
     },
     LocalStateLoaded {
-        favorites: Vec<Track>,
         pinned_playlists: Vec<Playlist>,
         recently_played: Vec<Track>,
     },
@@ -883,10 +874,6 @@ async fn run(
                 worker.finish_connect(connected).await;
                 continue;
             }
-            refreshed = finished(&mut worker.favorites.task) => {
-                worker.finish_favorite_refresh(refreshed).await;
-                continue;
-            }
             extended = finished(&mut worker.autoplay.task) => {
                 worker.finish_autoplay(extended).await;
                 continue;
@@ -926,7 +913,6 @@ struct Worker {
     queue: PlayQueue,
     connection: PlaybackConnection,
     catalog: CatalogFetches,
-    favorites: FavoriteRefresh,
     radio: Radio,
     autoplay: Autoplay,
     session: SessionTasks,
@@ -944,7 +930,6 @@ impl Worker {
             queue: PlayQueue::from_snapshot(startup.playback_snapshot),
             connection: PlaybackConnection::default(),
             catalog: CatalogFetches::default(),
-            favorites: FavoriteRefresh::default(),
             radio: Radio::default(),
             autoplay: Autoplay::default(),
             session: SessionTasks::default(),
@@ -1084,15 +1069,15 @@ impl Worker {
                 Ok(())
             }
             BackendCommand::PlayContext { tracks, index } => self.play_context(tracks, index).await,
+            BackendCommand::PlaySpotifyContext { spotify_uri } => {
+                self.play_spotify_context(spotify_uri).await
+            }
             BackendCommand::PlayNext(track) => self.play_next(track).await,
             BackendCommand::AppendToQueue(track) => self.append_to_queue(track).await,
             BackendCommand::RestorePlayback {
                 position_ms,
                 playing,
             } => self.restore_playback(position_ms, playing).await,
-            BackendCommand::SetFavorite { track, favorite } => {
-                self.set_favorite(track, favorite).await
-            }
             BackendCommand::SetPlaylistPinned { playlist, pinned } => {
                 self.set_playlist_pinned(playlist, pinned).await
             }
@@ -1313,12 +1298,48 @@ impl Worker {
             .unwrap_or_default();
         match load_context_track(&self.connection.player, &tracks, index, &self.events).await {
             Ok(()) => {
+                self.queue.context = None;
                 self.queue.tracks = tracks;
                 self.commit_loaded_queue(index).await;
             }
             Err(error) => {
                 let _ = self.events.send(BackendEvent::TrackFailed {
                     spotify_uri,
+                    error: error.to_string(),
+                });
+                let _ = self.events.send(BackendEvent::PlaybackSettled);
+            }
+        }
+        Ok(())
+    }
+
+    /// Starts a whole Spotify context (playlist, album) by URI. The daemon
+    /// resolves the contents through its own Connect session, so this works
+    /// even when the Web API would not hand riddim the track list; the
+    /// daemon then drives the progression and reports tracks as events.
+    async fn play_spotify_context(&mut self, spotify_uri: String) -> Result<()> {
+        self.radio.cancel(&self.events);
+        if self.connection.is_connecting() {
+            self.connection.hold_context(spotify_uri);
+            return Ok(());
+        }
+        match self.connected_player().cloned() {
+            Ok(player) => {
+                // The daemon owns the queue now: forget riddim's own so the
+                // two never disagree about what comes next.
+                self.queue.context = Some(spotify_uri.clone());
+                self.queue.tracks = Vec::new();
+                self.queue.index = None;
+                self.queue.position_ms = 0;
+                self.queue.ended = false;
+                player.load_context(spotify_uri);
+                if let Err(error) = self.store.clear_playback_state().await {
+                    send_error(&self.events, error);
+                }
+            }
+            Err(error) => {
+                let _ = self.events.send(BackendEvent::TrackFailed {
+                    spotify_uri: spotify_uri.clone(),
                     error: error.to_string(),
                 });
                 let _ = self.events.send(BackendEvent::PlaybackSettled);
@@ -1386,12 +1407,6 @@ impl Worker {
         Ok(())
     }
 
-    async fn set_favorite(&mut self, track: Track, favorite: bool) -> Result<()> {
-        self.store.set_favorite(track, favorite).await?;
-        send_local_state(&self.store, &self.events).await;
-        Ok(())
-    }
-
     async fn set_playlist_pinned(&mut self, playlist: Playlist, pinned: bool) -> Result<()> {
         self.store.set_playlist_pinned(playlist, pinned).await?;
         send_local_state(&self.store, &self.events).await;
@@ -1442,6 +1457,20 @@ impl Worker {
 
     async fn next_track(&mut self) -> Result<()> {
         self.radio.cancel(&self.events);
+        // The daemon owns the progression in context mode; a skip is a
+        // daemon command, not a queue move.
+        if self.queue.context.is_some() {
+            return match self.connected_player() {
+                Ok(player) => {
+                    player.skip_next();
+                    Ok(())
+                }
+                Err(error) => {
+                    let _ = self.events.send(BackendEvent::PlaybackSettled);
+                    Err(error)
+                }
+            };
+        }
         let Some(current) = self.queue.index else {
             let _ = self.events.send(BackendEvent::QueueEnded);
             return Ok(());
@@ -1473,6 +1502,18 @@ impl Worker {
 
     async fn previous_track(&mut self) -> Result<()> {
         self.radio.cancel(&self.events);
+        if self.queue.context.is_some() {
+            return match self.connected_player() {
+                Ok(player) => {
+                    player.skip_previous();
+                    Ok(())
+                }
+                Err(error) => {
+                    let _ = self.events.send(BackendEvent::PlaybackSettled);
+                    Err(error)
+                }
+            };
+        }
         if let Some(index) = self.queue.index.and_then(|index| index.checked_sub(1)) {
             return self.load_queue_track(index).await;
         }
@@ -1579,16 +1620,37 @@ impl Worker {
                     if let Err(error) = self.play_context(tracks, index).await {
                         send_error(&self.events, error);
                     }
+                } else if let Some(spotify_uri) = self.connection.pending_context.take() {
+                    if let Err(error) = self.play_spotify_context(spotify_uri).await {
+                        send_error(&self.events, error);
+                    }
                 } else if self.connection.connect_restoring {
                     let _ = self.events.send(BackendEvent::PlaybackReconnected);
-                } else if let Err(error) = restore_saved_playback(
-                    &self.connection.player,
-                    &self.queue.tracks,
-                    self.queue.index,
-                    self.queue.position_ms,
-                    &self.events,
-                ) {
-                    send_error(&self.events, error);
+                } else {
+                    // Restore the saved queue only when the daemon came up
+                    // empty. A daemon that already holds a session — a Connect
+                    // transfer, or another client using this device —
+                    // outranks riddim's saved state; steamrolling it with a
+                    // restore would yank playback away mid-track. Give the
+                    // controller a moment to report the engine's current
+                    // content (the connection sends GetState on connect).
+                    let player = self.connection.player.clone();
+                    let engine_holding = player.as_ref().map(|player| player.engine_holding_flag());
+                    let tracks = self.queue.tracks.clone();
+                    let index = self.queue.index;
+                    let position_ms = self.queue.position_ms;
+                    let events = self.events.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        if engine_holding.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                            return;
+                        }
+                        if let Err(error) =
+                            restore_saved_playback(&player, &tracks, index, position_ms, &events)
+                        {
+                            send_error(&events, error);
+                        }
+                    });
                 }
             }
             Some(Ok(Err(error))) => {
@@ -1604,27 +1666,6 @@ impl Worker {
             None => {}
         }
         self.connection.connect_restoring = false;
-    }
-
-    async fn finish_favorite_refresh(&mut self, refreshed: Finished<Result<Vec<Track>>>) {
-        self.favorites.task = None;
-        match refreshed {
-            Some(Ok(Ok(tracks))) => {
-                let mut changed = false;
-                for track in tracks {
-                    match self.store.set_favorite(track, true).await {
-                        Ok(()) => changed = true,
-                        Err(error) => send_error(&self.events, error),
-                    }
-                }
-                if changed {
-                    send_local_state(&self.store, &self.events).await;
-                }
-            }
-            Some(Ok(Err(error))) => send_error(&self.events, error),
-            Some(Err(error)) => send_error(&self.events, error),
-            None => {}
-        }
     }
 
     async fn finish_radio(&mut self, radio: Finished<(u64, Result<Vec<Track>>)>) {
@@ -1703,7 +1744,7 @@ impl Worker {
         }
     }
 
-    /// Starts the library load and favorite refresh for the signed-in account.
+    /// Starts the library load for the signed-in account.
     async fn start_account_loads(&mut self) {
         self.catalog.load_library(
             self.spotify.clone(),
@@ -1712,16 +1753,12 @@ impl Worker {
             self.catalog_generation.clone(),
             self.events.clone(),
         );
-        self.favorites
-            .start(&self.store, self.spotify.clone(), &self.events)
-            .await;
     }
 
-    /// Stops every task tied to the signed-in account: catalog loads, the
-    /// favorite refresh, and radio.
+    /// Stops every task tied to the signed-in account: catalog loads and
+    /// radio.
     fn abort_account_work(&mut self) {
         self.catalog.abort_all();
-        self.favorites.abort();
         self.radio.cancel(&self.events);
         abort_task(&mut self.autoplay.task);
     }
@@ -1892,6 +1929,10 @@ struct PlayQueue {
     /// EndOfTrack, where play() and seek() are no-ops; only a fresh load
     /// leaves it, so Resume and Seek take different paths while this is set.
     ended: bool,
+    /// The Spotify context URI the daemon is progressing through on its own,
+    /// set when riddim handed over a whole playlist/album it cannot read
+    /// through the Web API. Skips go to the daemon instead of the queue.
+    context: Option<String>,
 }
 
 impl PlayQueue {
@@ -1902,6 +1943,7 @@ impl PlayQueue {
                 index: Some(snapshot.index),
                 position_ms: snapshot.position_ms,
                 ended: false,
+                context: None,
             },
             None => Self::default(),
         }
@@ -1933,52 +1975,6 @@ impl SessionTasks {
         if let Some(task) = self.logout.take() {
             let _ = task.await;
         }
-    }
-}
-
-/// Favorites saved before tracks carried full catalog references get their
-/// missing artist and album ids re-resolved once per sign-in.
-#[derive(Default)]
-struct FavoriteRefresh {
-    task: Option<tokio::task::JoinHandle<Result<Vec<Track>>>>,
-}
-
-impl FavoriteRefresh {
-    async fn start(
-        &mut self,
-        store: &BlockingStore,
-        spotify: Spotify,
-        events: &UnboundedSender<BackendEvent>,
-    ) {
-        self.abort();
-        let favorites = match store.favorites().await {
-            Ok(favorites) => favorites,
-            Err(error) => {
-                send_error(events, error);
-                return;
-            }
-        };
-        let uris = favorites
-            .into_iter()
-            .filter(favorite_needs_catalog_refresh)
-            .map(|track| {
-                track
-                    .spotify_uri
-                    .unwrap_or_else(|| format!("spotify:track:{}", track.source_id))
-            })
-            .collect::<Vec<_>>();
-        if uris.is_empty() {
-            return;
-        }
-        self.task = Some(tokio::spawn(async move {
-            tokio::time::timeout(Duration::from_secs(60), spotify.resolve_track_uris(&uris))
-                .await
-                .context("Spotify favorite refresh timed out")?
-        }));
-    }
-
-    fn abort(&mut self) {
-        abort_task(&mut self.task);
     }
 }
 
@@ -2179,6 +2175,8 @@ struct PlaybackConnection {
     /// A play requested while the session was still connecting, started as
     /// soon as it is up so the first click after launch is not lost.
     pending_play: Option<(Vec<Track>, usize)>,
+    /// The same hold for a context handover (`PlaySpotifyContext`).
+    pending_context: Option<String>,
 }
 
 impl PlaybackConnection {
@@ -2197,7 +2195,15 @@ impl PlaybackConnection {
     /// play held before it.
     fn hold_play(&mut self, tracks: Vec<Track>, index: usize) {
         log::info!("playback: holding play until the session connects");
+        self.pending_context = None;
         self.pending_play = Some((tracks, index));
+    }
+
+    /// The context twin of [`Self::hold_play`].
+    fn hold_context(&mut self, spotify_uri: String) {
+        log::info!("playback: holding context play until the session connects");
+        self.pending_play = None;
+        self.pending_context = Some(spotify_uri);
     }
 
     /// Reports a held play as failed once the connection it waited on did.
@@ -2206,18 +2212,24 @@ impl PlaybackConnection {
         error: &dyn std::fmt::Display,
         events: &UnboundedSender<BackendEvent>,
     ) {
-        let Some((tracks, index)) = self.pending_play.take() else {
-            return;
-        };
-        let spotify_uri = tracks
-            .get(index)
-            .and_then(|track| track.spotify_uri.clone())
-            .unwrap_or_default();
-        let _ = events.send(BackendEvent::TrackFailed {
-            spotify_uri,
-            error: format!("Spotify playback is not connected: {error}"),
-        });
-        let _ = events.send(BackendEvent::PlaybackSettled);
+        if let Some((tracks, index)) = self.pending_play.take() {
+            let spotify_uri = tracks
+                .get(index)
+                .and_then(|track| track.spotify_uri.clone())
+                .unwrap_or_default();
+            let _ = events.send(BackendEvent::TrackFailed {
+                spotify_uri,
+                error: format!("Spotify playback is not connected: {error}"),
+            });
+            let _ = events.send(BackendEvent::PlaybackSettled);
+        }
+        if let Some(spotify_uri) = self.pending_context.take() {
+            let _ = events.send(BackendEvent::TrackFailed {
+                spotify_uri: spotify_uri.clone(),
+                error: format!("Spotify playback is not connected: {error}"),
+            });
+            let _ = events.send(BackendEvent::PlaybackSettled);
+        }
     }
 
     fn adopt(&mut self, player: Playback, events: &UnboundedSender<BackendEvent>) {
@@ -2551,6 +2563,26 @@ fn observe_playback(
                 PlaybackEvent::EndOfTrack { spotify_uri } => {
                     Some(BackendEvent::EndOfTrack { spotify_uri })
                 }
+                PlaybackEvent::ContextTrack { item } => {
+                    // The daemon resolved the context itself; what riddim
+                    // knows about the track comes from the entity's
+                    // decorations. Adopt it as the whole context so the
+                    // player bar, seeker, and skip controls follow along.
+                    match track_from_soloist_entity(&item) {
+                        Some(track) => Some(BackendEvent::PlaybackContext {
+                            current: track,
+                            next: Vec::new(),
+                        }),
+                        None => {
+                            log::warn!(
+                                "soloist: ignoring context track riddim cannot display: {}",
+                                item.uri
+                            );
+                            None
+                        }
+                    }
+                }
+                PlaybackEvent::ContextEnded { .. } => Some(BackendEvent::QueueEnded),
                 PlaybackEvent::PositionChanged {
                     spotify_uri,
                     position_ms,
@@ -2633,25 +2665,114 @@ fn send_playback_context(tracks: &[Track], index: usize, events: &UnboundedSende
     }
 }
 
+/// Builds a displayable track from a daemon-reported entity. The decorations
+/// are all riddim has in context mode — the Web API was never asked for the
+/// context's contents — so missing fields fall back to placeholders rather
+/// than dropping the track the listener is hearing.
+fn track_from_soloist_entity(entity: &soloist::Entity) -> Option<Track> {
+    let (kind, base) = match entity.entity_type.as_str() {
+        "track" => (MediaKind::Music, "spotify:track:"),
+        "episode" => (MediaKind::Episode, "spotify:episode:"),
+        _ => return None,
+    };
+    let source_id = entity.uri.strip_prefix(base)?.to_owned();
+    let decorations = &entity.decorations;
+    let title = decorations
+        .identity
+        .as_ref()
+        .and_then(|identity| identity.name.clone())
+        .unwrap_or_else(|| source_id.clone());
+    let artists: Vec<ArtistRef> = decorations
+        .creators
+        .iter()
+        .filter_map(|creator| creator.entity.as_deref())
+        .filter(|creator| creator.entity_type == "artist")
+        .map(|creator| ArtistRef {
+            name: creator
+                .decorations
+                .identity
+                .as_ref()
+                .and_then(|identity| identity.name.clone())
+                .unwrap_or_else(|| "Unknown artist".into())
+                .into(),
+            source_id: creator
+                .uri
+                .strip_prefix("spotify:artist:")
+                .map(str::to_owned),
+            spotify_uri: (!creator.uri.is_empty()).then(|| creator.uri.clone()),
+        })
+        .collect();
+    let album = decorations.parent.as_ref().and_then(|parent| {
+        let album = parent.entity.as_deref()?;
+        Some(AlbumRef {
+            name: album
+                .decorations
+                .identity
+                .as_ref()
+                .and_then(|identity| identity.name.clone())
+                .unwrap_or_default()
+                .into(),
+            source_id: album.uri.strip_prefix("spotify:album:").map(str::to_owned),
+            spotify_uri: (!album.uri.is_empty()).then(|| album.uri.clone()),
+            artwork_url: cover_url(&album.decorations),
+        })
+    });
+    let album_artwork = album.as_ref().and_then(|album| album.artwork_url.clone());
+    let duration_ms = decorations
+        .playback
+        .as_ref()
+        .and_then(|playback| playback.duration_ms)
+        .and_then(|duration| u32::try_from(duration).ok())
+        .unwrap_or_default();
+    let artist = if artists.is_empty() {
+        "Unknown artist".into()
+    } else {
+        artists
+            .iter()
+            .map(|artist| artist.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+            .into()
+    };
+    Some(Track {
+        provider: Provider::Spotify,
+        source_id,
+        spotify_uri: Some(entity.uri.clone()),
+        isrc: None,
+        title: title.into(),
+        artist,
+        artists,
+        album: album
+            .as_ref()
+            .map(|album| album.name.to_string())
+            .unwrap_or_default()
+            .into(),
+        album_ref: album.clone(),
+        duration_ms,
+        artwork_url: cover_url(decorations).or(album_artwork),
+        kind,
+        release_date: None,
+    })
+}
+
+/// The best cover image in an entity's decorations, preferring sizes close to
+/// what the player bar shows.
+fn cover_url(decorations: &soloist::Decorations) -> Option<String> {
+    let covers = &decorations.visual_identity.as_ref()?.cover;
+    covers
+        .iter()
+        .find(|cover| cover.size == "large" || cover.size == "default")
+        .or_else(|| covers.first())
+        .filter(|cover| !cover.url.is_empty())
+        .map(|cover| cover.url.clone())
+}
+
 fn send_error(events: &UnboundedSender<BackendEvent>, error: impl std::fmt::Display) {
     let _ = events.send(BackendEvent::Error(error.to_string()));
 }
 
 fn send_fatal_error(events: &UnboundedSender<BackendEvent>, error: impl std::fmt::Display) {
     let _ = events.send(BackendEvent::FatalError(error.to_string()));
-}
-
-fn favorite_needs_catalog_refresh(track: &Track) -> bool {
-    track.provider == crate::model::Provider::Spotify
-        && (!track
-            .artists
-            .iter()
-            .any(|artist| artist.source_id.is_some())
-            || track
-                .album_ref
-                .as_ref()
-                .and_then(|album| album.source_id.as_ref())
-                .is_none())
 }
 
 fn build_radio_context(seed: Track, recommendations: Vec<Track>) -> Result<Vec<Track>> {
@@ -2675,9 +2796,8 @@ fn build_radio_context(seed: Track, recommendations: Vec<Track>) -> Result<Vec<T
 
 async fn send_local_state(store: &BlockingStore, events: &UnboundedSender<BackendEvent>) {
     match store.local_state().await {
-        Ok((favorites, pinned_playlists, recently_played)) => {
+        Ok((pinned_playlists, recently_played)) => {
             let _ = events.send(BackendEvent::LocalStateLoaded {
-                favorites,
                 pinned_playlists,
                 recently_played,
             });
@@ -2690,10 +2810,80 @@ async fn send_local_state(store: &BlockingStore, events: &UnboundedSender<Backen
 mod tests {
     use super::{
         BackendCommand, BackendEvent, BlockingStore, PlaybackConnection, build_radio_context,
-        favorite_needs_catalog_refresh, send_command,
+        send_command, track_from_soloist_entity,
     };
-    use crate::model::{AlbumRef, ArtistRef, MediaKind, Provider, Track};
+    use crate::model::{MediaKind, Provider, Track};
+    use crate::soloist;
     use crate::storage::Store;
+    use serde_json::json;
+
+    /// A decorated entity shaped like Soloist's documented samples, covering
+    /// the fields the context-mode now-playing conversion relies on.
+    fn context_entity() -> soloist::Entity {
+        serde_json::from_value(json!({
+            "uri": "spotify:track:2JRo0gjbX4GrCqBYdRohoo",
+            "entity_type": "track",
+            "decorations": {
+                "identity": { "name": "My Song" },
+                "visual_identity": { "cover": [
+                    { "url": "https://i.scdn.co/small", "size": "small" },
+                    { "url": "https://i.scdn.co/large", "size": "large" }
+                ]},
+                "parent": { "entity": {
+                    "uri": "spotify:album:4aawyAB9vmqN3uQ7FjRGTy",
+                    "entity_type": "album",
+                    "decorations": { "identity": { "name": "Album Name" } }
+                }},
+                "creators": [ { "entity": {
+                    "uri": "spotify:artist:artist-id",
+                    "entity_type": "artist",
+                    "decorations": { "identity": { "name": "Artist Name" } }
+                }}],
+                "playback": { "duration_ms": 210000 }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn daemon_entities_become_displayable_tracks() {
+        let track = track_from_soloist_entity(&context_entity()).unwrap();
+        assert_eq!(track.source_id, "2JRo0gjbX4GrCqBYdRohoo");
+        assert_eq!(
+            track.spotify_uri.as_deref(),
+            Some("spotify:track:2JRo0gjbX4GrCqBYdRohoo")
+        );
+        assert_eq!(track.title.as_str(), "My Song");
+        assert_eq!(track.artist.as_str(), "Artist Name");
+        assert_eq!(track.album.as_str(), "Album Name");
+        assert_eq!(track.duration_ms, 210_000);
+        assert_eq!(track.kind, MediaKind::Music);
+        assert_eq!(
+            track.artwork_url.as_deref(),
+            Some("https://i.scdn.co/large")
+        );
+        let album = track.album_ref.unwrap();
+        assert_eq!(album.source_id.as_deref(), Some("4aawyAB9vmqN3uQ7FjRGTy"));
+        assert_eq!(track.artists[0].source_id.as_deref(), Some("artist-id"));
+    }
+
+    #[test]
+    fn daemon_episodes_become_episodes_and_unknown_entities_are_dropped() {
+        let mut episode = context_entity();
+        episode.uri = "spotify:episode:episode-id".to_owned();
+        episode.entity_type = "episode".to_owned();
+        let track = track_from_soloist_entity(&episode).unwrap();
+        assert_eq!(track.kind, MediaKind::Episode);
+
+        let mut artist = context_entity();
+        artist.uri = "spotify:artist:artist-id".to_owned();
+        artist.entity_type = "artist".to_owned();
+        assert!(track_from_soloist_entity(&artist).is_none());
+
+        let mut anonymous = context_entity();
+        anonymous.uri = String::new();
+        assert!(track_from_soloist_entity(&anonymous).is_none());
+    }
 
     fn favorite() -> Track {
         Track {
@@ -2798,30 +2988,6 @@ mod tests {
         let client_id = store.call(|store| store.spotify_client_id()).await.unwrap();
 
         assert_eq!(client_id.as_deref(), Some("second"));
-    }
-
-    #[test]
-    fn only_incomplete_spotify_favorites_need_catalog_refresh() {
-        let legacy = favorite();
-        assert!(favorite_needs_catalog_refresh(&legacy));
-
-        let mut complete = legacy.clone();
-        complete.artists.push(ArtistRef {
-            name: "Artist".into(),
-            source_id: Some("artist-id".to_owned()),
-            spotify_uri: Some("spotify:artist:artist-id".to_owned()),
-        });
-        complete.album_ref = Some(AlbumRef {
-            name: "Album".into(),
-            source_id: Some("album-id".to_owned()),
-            spotify_uri: Some("spotify:album:album-id".to_owned()),
-            artwork_url: None,
-        });
-        assert!(!favorite_needs_catalog_refresh(&complete));
-
-        let mut non_spotify = legacy;
-        non_spotify.provider = Provider::Tidal;
-        assert!(!favorite_needs_catalog_refresh(&non_spotify));
     }
 
     #[test]

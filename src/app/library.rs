@@ -15,8 +15,6 @@ pub(super) struct Library {
     liked_tracks: Arc<[model::Track]>,
     playlists: Arc<[model::Playlist]>,
     loaded: bool,
-    favorites: Arc<[model::Track]>,
-    favorite_keys: HashMap<model::Provider, HashSet<String>>,
     pinned_playlists: Arc<[model::Playlist]>,
     recently_played: Arc<[model::Track]>,
     local_loaded: bool,
@@ -40,8 +38,6 @@ impl Library {
             liked_tracks: Arc::default(),
             playlists: Arc::default(),
             loaded: false,
-            favorites: Arc::default(),
-            favorite_keys: HashMap::new(),
             pinned_playlists: Arc::default(),
             recently_played: Arc::default(),
             local_loaded: false,
@@ -117,10 +113,6 @@ impl Library {
         self.loaded
     }
 
-    pub(super) fn favorites(&self) -> &Arc<[model::Track]> {
-        &self.favorites
-    }
-
     pub(super) fn pinned_playlists(&self) -> &Arc<[model::Playlist]> {
         &self.pinned_playlists
     }
@@ -131,12 +123,6 @@ impl Library {
 
     pub(super) fn local_loaded(&self) -> bool {
         self.local_loaded
-    }
-
-    pub(super) fn is_favorite(&self, track: &model::Track) -> bool {
-        self.favorite_keys
-            .get(&track.provider)
-            .is_some_and(|ids| ids.contains(&track.source_id))
     }
 
     pub(super) fn is_playlist_pinned(&self, playlist: &model::Playlist) -> bool {
@@ -150,17 +136,6 @@ impl Library {
         self.loaded = true;
         self.boot_refreshing = false;
         cx.notify();
-    }
-
-    pub(super) fn set_favorite(
-        &mut self,
-        track: model::Track,
-        favorite: bool,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        cx.notify();
-        self.backend
-            .send(BackendCommand::SetFavorite { track, favorite })
     }
 
     pub(super) fn set_playlist_pinned(
@@ -233,12 +208,10 @@ impl Library {
                 }
             }
             BackendEvent::LocalStateLoaded {
-                favorites,
                 pinned_playlists,
                 recently_played,
+                ..
             } => {
-                self.favorite_keys = index_favorites(&favorites);
-                self.favorites = favorites.into();
                 self.pinned_playlists = pinned_playlists.into();
                 self.recently_played = recently_played.into();
                 self.local_loaded = true;

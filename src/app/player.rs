@@ -210,6 +210,26 @@ impl Player {
         started
     }
 
+    /// Plays a whole Spotify context (playlist, album) by URI when its track
+    /// list is unavailable: the daemon resolves and drives it, and riddim
+    /// adopts whatever the daemon reports as now playing.
+    pub(super) fn play_spotify_context(
+        &mut self,
+        spotify_uri: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let started = self.send(BackendCommand::PlaySpotifyContext { spotify_uri }, cx);
+        if started {
+            self.now_playing = None;
+            self.clock.reset(0, cx.background_executor().now());
+            self.set_playback(false, cx);
+            self.loading = true;
+            self.history_pending = false;
+        }
+        cx.notify();
+        started
+    }
+
     pub(super) fn play_next(&mut self, track: model::Track, cx: &mut Context<Self>) -> bool {
         self.deliver(BackendCommand::PlayNext(track), cx)
     }

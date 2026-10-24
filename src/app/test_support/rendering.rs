@@ -1,6 +1,6 @@
 use super::*;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
+use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent};
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 enum Scene {
     Settings,
     SettingsAutoplayOff,
-    SettingsMenu,
     Setup,
     SetupFilled,
     SearchEntered,
@@ -26,7 +25,6 @@ fn scenes() -> Vec<(&'static str, Scene)> {
     vec![
         ("settings", Scene::Settings),
         ("settings-autoplay-off", Scene::SettingsAutoplayOff),
-        ("settings-mascot-open", Scene::SettingsMenu),
         ("setup", Scene::Setup),
         ("setup-filled", Scene::SetupFilled),
         ("search-entered", Scene::SearchEntered),
@@ -127,7 +125,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         let (handle, workspace) = workspace(&mut cx, width, height);
         cx.update(|cx| {
             workspace.update(cx, |workspace, cx| match scene {
-                Scene::Settings | Scene::SettingsAutoplayOff | Scene::SettingsMenu => {
+                Scene::Settings | Scene::SettingsAutoplayOff => {
                     workspace.open_settings(cx);
                     if matches!(scene, Scene::SettingsAutoplayOff) {
                         services::AppServices::set_autoplay(false, cx)
@@ -168,43 +166,6 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             for character in "0123456789abcdef0123456789abcdef".chars() {
                 press_key(&mut cx, handle.into(), &character.to_string());
             }
-        }
-        Scene::SettingsMenu => {
-            let sidebar_width = if uses_compact_player_layout(px(width), px(16.)) {
-                200.
-            } else {
-                232.
-            };
-            let content_width = (width - sidebar_width).min(760.);
-            let position = point(
-                px((width + sidebar_width + content_width) / 2. - 170.),
-                px(480.),
-            );
-            cx.update_window(handle.into(), |_, window, cx| {
-                window.dispatch_event(
-                    MouseDownEvent {
-                        button: MouseButton::Left,
-                        position,
-                        modifiers: Modifiers::default(),
-                        click_count: 1,
-                        first_mouse: false,
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-                window.dispatch_event(
-                    MouseUpEvent {
-                        button: MouseButton::Left,
-                        position,
-                        modifiers: Modifiers::default(),
-                        click_count: 1,
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-            })
-            .expect("open mascot selector");
-            settle(&mut cx, handle.into());
         }
         _ => {}
     }

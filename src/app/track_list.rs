@@ -18,7 +18,6 @@ pub(super) struct TrackList {
     menu_open: Option<String>,
     /// Album already on screen, whose "Go to album" entry would go nowhere.
     current_album_id: Option<String>,
-    library: Entity<library::Library>,
     player: Entity<player::Player>,
     image_cache: Entity<image_cache::BoundedImageCache>,
 }
@@ -32,7 +31,6 @@ impl TrackList {
             tracks: Arc::default(),
             menu_open: None,
             current_album_id: None,
-            library: services::AppServices::library(cx),
             player: services::AppServices::player(cx),
             image_cache: services::AppServices::image_cache(cx),
         }
@@ -84,24 +82,16 @@ impl TrackList {
         };
         let palette = appearance::Appearance::palette(cx);
         let is_current_track = self.player.read(cx).is_current_track(&track);
-        let favorite = self.library.read(cx).is_favorite(&track);
         let menu_key = format!("{}:{index}", track.source_id);
         let menu_open = self.menu_open.as_deref() == Some(menu_key.as_str());
         let menu = menu_open
-            .then(|| self.action_menu(&track, index, favorite, is_current_track, cx))
+            .then(|| self.action_menu(&track, index, is_current_track, cx))
             .map(IntoElement::into_any_element);
-        let favorite_track = track.clone();
         track_row::TrackRow::new(index, track, palette, self.image_cache.clone())
             .compact(compact)
             .current(is_current_track)
-            .favorite(favorite)
             .menu(menu_open, menu)
             .on_play(cx.listener(move |this, _, _, cx| this.play_from(index, cx)))
-            .on_favorite(cx.listener(move |this, _, _, cx| {
-                this.library.update(cx, |library, cx| {
-                    library.set_favorite(favorite_track.clone(), !favorite, cx)
-                });
-            }))
             .on_toggle_menu(cx.listener(move |this, _, _, cx| {
                 this.menu_open = (!menu_open).then(|| menu_key.clone());
                 cx.notify();
@@ -119,7 +109,6 @@ impl TrackList {
         &self,
         track: &model::Track,
         index: usize,
-        favorite: bool,
         is_current_track: bool,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -128,7 +117,6 @@ impl TrackList {
         let next_track = track.clone();
         let queue_track = track.clone();
         let radio_track = track.clone();
-        let favorite_track = track.clone();
         let artist = track
             .artists
             .iter()
@@ -206,25 +194,6 @@ impl TrackList {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.menu_open = None;
                     cx.emit(PageEvent::StartRadio(radio_track.clone()));
-                    cx.notify();
-                })),
-            )
-            .child(separator())
-            .child(
-                components::text_menu_item(
-                    palette,
-                    ("track-menu-favorite", index),
-                    if favorite {
-                        "Remove from favorites"
-                    } else {
-                        "Add to favorites"
-                    },
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.menu_open = None;
-                    this.library.update(cx, |library, cx| {
-                        library.set_favorite(favorite_track.clone(), !favorite, cx)
-                    });
                     cx.notify();
                 })),
             )

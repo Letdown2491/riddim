@@ -7,7 +7,7 @@ use crate::app::{
 };
 use crate::backend::{BackendCommand, BackendEvent};
 use crate::model;
-use crate::storage::{MascotPreference, ThemePreference};
+use crate::storage::ThemePreference;
 use gpui_kit::component::Root;
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{
@@ -16,7 +16,6 @@ use gpui_kit::{
     WindowHandle, point, px, size,
 };
 use std::sync::Arc;
-use std::time::Duration;
 
 struct Fixture {
     cx: HeadlessAppContext,
@@ -190,16 +189,6 @@ impl Fixture {
             .expect("fixture window");
         settle(&mut self.cx, self.window.into());
         result
-    }
-
-    fn wait_for(&mut self, predicate: impl Fn(&mut Window, &mut App) -> bool) {
-        for _ in 0..20 {
-            if self.update(&predicate) {
-                return;
-            }
-            self.cx.advance_clock(Duration::from_millis(10));
-        }
-        panic!("UI did not settle within 200 ms");
     }
 
     fn no_commands(&mut self) {
@@ -411,47 +400,6 @@ fn tab_rings_the_autoplay_switch_and_space_toggles_it() {
 }
 
 #[test]
-fn mascot_select_commits_enter_and_preserves_selection_on_escape_and_outside_click() {
-    let mut fixture = Fixture::new(true);
-    fixture.update(|window, cx| window.within("settings-mascot").click("input", cx));
-    fixture.update(|window, cx| {
-        assert_eq!(window.find("settings-mascot").expanded(), Some(true));
-        window.press("down", cx);
-    });
-    fixture.update(|window, cx| window.press("enter", cx));
-    fixture.wait_for(|window, _| window.find("settings-mascot").expanded() == Some(false));
-    fixture.update(|window, cx| {
-        assert_eq!(
-            services::AppServices::preferences(cx).mascot,
-            MascotPreference::RomeoVespa
-        );
-        assert_eq!(window.find("settings-mascot").value(), Some("Vespa Romeo"));
-        window.within("settings-mascot").click("input", cx);
-    });
-    fixture.update(|window, cx| window.press("down", cx));
-    fixture.update(|window, cx| window.press("escape", cx));
-    fixture.wait_for(|window, _| window.find("settings-mascot").expanded() == Some(false));
-    fixture.update(|window, cx| {
-        assert_eq!(
-            services::AppServices::preferences(cx).mascot,
-            MascotPreference::RomeoVespa
-        );
-        assert_eq!(window.find("settings-mascot").value(), Some("Vespa Romeo"));
-        window.within("settings-mascot").click("input", cx);
-    });
-    fixture.update(|window, cx| window.press("down", cx));
-    fixture.update(|window, cx| window.click("volume", cx));
-    fixture.wait_for(|window, _| window.find("settings-mascot").expanded() == Some(false));
-    fixture.update(|window, cx| {
-        assert_eq!(
-            services::AppServices::preferences(cx).mascot,
-            MascotPreference::RomeoVespa
-        );
-        assert_eq!(window.find("settings-mascot").value(), Some("Vespa Romeo"));
-    });
-}
-
-#[test]
 fn queue_toggle_and_close_button_control_the_panel_without_backend_commands() {
     let mut fixture = Fixture::new(false);
     fixture.update(|window, cx| {
@@ -507,7 +455,7 @@ fn queue_keyboard_activation_preserves_playback_and_reports_expansion() {
 }
 
 #[test]
-fn duplicate_track_actions_preserve_row_index_and_favorite_does_not_start_playback() {
+fn duplicate_track_actions_preserve_row_index() {
     let mut fixture = Fixture::new(false);
     fixture.update(|window, cx| window.hover(("spotify-track", 2usize), cx));
     fixture.update(|window, cx| window.click(("track-actions", 2usize), cx));
@@ -522,47 +470,6 @@ fn duplicate_track_actions_preserve_row_index_and_favorite_does_not_start_playba
             assert_eq!(tracks[1].source_id, tracks[2].source_id);
             assert_eq!(tracks[index].source_id, track(1).source_id);
         }
-        command => panic!("unexpected command: {command:?}"),
-    }
-    fixture.no_commands();
-    fixture.update(|window, cx| window.click(("spotify-favorite", 3usize), cx));
-    match fixture
-        .backend
-        .commands
-        .try_recv()
-        .expect("favorite command")
-    {
-        BackendCommand::SetFavorite {
-            track: favorite,
-            favorite: true,
-        } => assert_eq!(favorite.source_id, track(2).source_id),
-        command => panic!("unexpected command: {command:?}"),
-    }
-    fixture.no_commands();
-    fixture.update(|_, cx| {
-        services::AppServices::library(cx).update(cx, |library, cx| {
-            library.handle_backend_event(
-                BackendEvent::LocalStateLoaded {
-                    favorites: vec![track(0), track(2)],
-                    pinned_playlists: Vec::new(),
-                    recently_played: Vec::new(),
-                },
-                0,
-                cx,
-            );
-        });
-    });
-    fixture.update(|window, cx| window.click(("spotify-favorite", 3usize), cx));
-    match fixture
-        .backend
-        .commands
-        .try_recv()
-        .expect("unfavorite command")
-    {
-        BackendCommand::SetFavorite {
-            track: favorite,
-            favorite: false,
-        } => assert_eq!(favorite.source_id, track(2).source_id),
         command => panic!("unexpected command: {command:?}"),
     }
     fixture.no_commands();
@@ -1073,11 +980,11 @@ fn reduced_motion_toggles_the_sidebar_straight_to_its_final_width() {
 #[test]
 fn tab_reaches_the_sidebar_rows_and_enter_opens_the_focused_row() {
     let mut fixture = Fixture::new(false);
-    fixture.tab_to("nav-favorites");
+    fixture.tab_to("nav-playlist");
 
     fixture.press("enter");
-    assert_eq!(fixture.route(), Route::Favorites);
-    assert!(fixture.focused("nav-favorites"));
+    assert_eq!(fixture.route(), Route::Playlists);
+    assert!(fixture.focused("nav-playlist"));
     fixture.no_commands();
 }
 
@@ -1101,9 +1008,9 @@ fn a_pointer_press_leaves_keyboard_focus_with_the_workspace() {
     fixture.press(&format!("{}-k", primary_modifier()));
     assert!(fixture.focused("search-input"));
 
-    fixture.update(|window, cx| window.click("nav-favorites", cx));
-    assert_eq!(fixture.route(), Route::Favorites);
-    assert!(!fixture.focused("nav-favorites"));
+    fixture.update(|window, cx| window.click("nav-playlist", cx));
+    assert_eq!(fixture.route(), Route::Playlists);
+    assert!(!fixture.focused("nav-playlist"));
     assert!(!fixture.focused("search-input"));
 
     fixture.press("space");

@@ -21,7 +21,6 @@ pub(super) const CONTROL_ICON: Rems = Rems(1.0625);
 pub(super) const FIELD_ICON: Rems = Rems(1.);
 pub(super) const PLAYBACK_ICON: Rems = Rems(1.);
 pub(super) const MENU_ICON: Rems = Rems(0.9375);
-pub(super) const COLUMN_HEADER_ICON: Rems = Rems(0.75);
 pub(super) const INLINE_ICON: Rems = Rems(0.6875);
 
 pub(super) const INLINE_ICON_GAP: Rems = Rems(0.3125);
@@ -38,7 +37,6 @@ pub(super) const DIALOG_WIDTH: Rems = Rems(27.5);
 pub(super) const NOTICE_BANNER_WIDTH: Rems = Rems(22.5);
 pub(super) const NOTICE_BANNER_TOP: Rems = Rems(4.75);
 pub(super) const SETTINGS_MAX_WIDTH: Rems = Rems(47.5);
-pub(super) const SETTINGS_FIELD_WIDTH: Rems = Rems(13.75);
 
 pub(super) const NAV_ROW_HEIGHT: Rems = Rems(2.625);
 pub(super) const BRAND_LABEL_GAP: Rems = Rems(1.03125);

@@ -8,8 +8,6 @@ use gpui_kit::{SharedString, component::IconNamed};
 pub(super) enum RiddimIcon {
     Heart,
     HeartFilled,
-    Star,
-    StarFilled,
     Clock,
     ClockFilled,
     Search,
@@ -42,11 +40,9 @@ pub(super) enum RiddimIcon {
 
 impl RiddimIcon {
     #[cfg(test)]
-    pub(super) const ALL: [Self; 32] = [
+    pub(super) const ALL: [Self; 30] = [
         Self::Heart,
         Self::HeartFilled,
-        Self::Star,
-        Self::StarFilled,
         Self::Clock,
         Self::ClockFilled,
         Self::Search,
@@ -81,8 +77,6 @@ impl RiddimIcon {
         match self {
             Self::Heart => "heart",
             Self::HeartFilled => "heart-filled",
-            Self::Star => "star",
-            Self::StarFilled => "star-filled",
             Self::Clock => "clock",
             Self::ClockFilled => "clock-filled",
             Self::Search => "search",

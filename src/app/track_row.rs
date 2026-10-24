@@ -7,7 +7,6 @@ use gpui_kit::ClickEvent;
 const COLUMN_GUTTER: Rems = Rems(1.);
 /// The fixed columns; Title and Album flex to share whatever remains.
 const INDEX_COLUMN_WIDTH: Rems = Rems(2.75);
-const STAR_COLUMN_WIDTH: Rems = Rems(2.25);
 const TIME_COLUMN_WIDTH: Rems = Rems(3.75);
 const ACTIONS_COLUMN_WIDTH: Rems = Rems(2.25);
 /// How far the actions menu drops below its trigger, and the room it keeps
@@ -35,19 +34,6 @@ pub(super) fn track_list_header(palette: RiddimPalette, compact: bool) -> Div {
         })
         .child(
             div()
-                .w(STAR_COLUMN_WIDTH)
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(components::icon(
-                    RiddimIcon::Star,
-                    tokens::COLUMN_HEADER_ICON,
-                    palette.text_muted,
-                )),
-        )
-        .child(
-            div()
                 .w(TIME_COLUMN_WIDTH)
                 .flex_none()
                 .flex()
@@ -72,9 +58,9 @@ type RowCallback = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
 /// One track in a list.
 ///
-/// Stateless: the list that shows it decides whether it is current, favorited
-/// or has its menu open, and supplies the behaviour as callbacks. The row never
-/// reaches for the player or the library itself.
+/// Stateless: the list that shows it decides whether it is current or has its
+/// menu open, and supplies the behaviour as callbacks. The row never reaches
+/// for the player or the library itself.
 #[derive(IntoElement)]
 pub(super) struct TrackRow {
     index: usize,
@@ -83,12 +69,10 @@ pub(super) struct TrackRow {
     image_cache: Entity<image_cache::BoundedImageCache>,
     compact: bool,
     current: bool,
-    favorite: bool,
     menu_open: bool,
     /// Rendered beside the actions button while the menu is open.
     menu: Option<AnyElement>,
     on_play: Option<RowCallback>,
-    on_favorite: Option<RowCallback>,
     on_toggle_menu: Option<RowCallback>,
 }
 
@@ -106,11 +90,9 @@ impl TrackRow {
             image_cache,
             compact: false,
             current: false,
-            favorite: false,
             menu_open: false,
             menu: None,
             on_play: None,
-            on_favorite: None,
             on_toggle_menu: None,
         }
     }
@@ -127,11 +109,6 @@ impl TrackRow {
         self
     }
 
-    pub(super) fn favorite(mut self, favorite: bool) -> Self {
-        self.favorite = favorite;
-        self
-    }
-
     pub(super) fn menu(mut self, open: bool, menu: Option<AnyElement>) -> Self {
         self.menu_open = open;
         self.menu = menu;
@@ -143,14 +120,6 @@ impl TrackRow {
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_play = Some(Box::new(handler));
-        self
-    }
-
-    pub(super) fn on_favorite(
-        mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.on_favorite = Some(Box::new(handler));
         self
     }
 
@@ -243,33 +212,6 @@ impl RenderOnce for TrackRow {
                     ),
                 )
             })
-            .child(
-                components::button(palette, ("spotify-favorite", index))
-                    .test_support()
-                    .size(STAR_COLUMN_WIDTH)
-                    .flex_none()
-                    .rounded_full()
-                    .hover(|style| style.bg(rgb(palette.control)))
-                    .child(components::icon(
-                        if self.favorite {
-                            RiddimIcon::StarFilled
-                        } else {
-                            RiddimIcon::Star
-                        },
-                        tokens::MENU_ICON,
-                        if self.favorite {
-                            palette.text_primary
-                        } else {
-                            palette.text
-                        },
-                    ))
-                    .when_some(self.on_favorite, |button, handler| {
-                        button.on_click(move |event, window, cx| {
-                            cx.stop_propagation();
-                            handler(event, window, cx);
-                        })
-                    }),
-            )
             .child(
                 div()
                     .w(TIME_COLUMN_WIDTH)

@@ -7,6 +7,8 @@
 //! developer dashboard (stored in the keychain) and a one-time pairing from
 //! any Spotify app; no separate playback OAuth flow exists.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
@@ -16,6 +18,9 @@ use tokio::sync::mpsc;
 use crate::{credential_worker, soloist};
 
 const KEYCHAIN_SERVICE: &str = "io.github.letdown2491.riddim";
+/// The service name before the app was renamed; keys stored under it are
+/// adopted on first load so a rename does not orphan stored credentials.
+const KEYCHAIN_SERVICE_LEGACY: &str = "dev.twoducks.riddim";
 const KEYCHAIN_ACCOUNT_API_KEY: &str = "soloist-api-key";
 
 /// The control surface the queue machine in `backend.rs` drives.
@@ -26,6 +31,14 @@ pub(crate) enum PlaybackCommand {
         playing: bool,
         position_ms: u32,
     },
+    /// Starts a whole Spotify context (playlist, album) by URI: the daemon
+    /// reads the contents through its own Connect session and drives the
+    /// progression itself; riddim only observes.
+    LoadContext {
+        spotify_uri: String,
+    },
+    SkipNext,
+    SkipPrevious,
     Play,
     Pause,
     Seek {
@@ -57,6 +70,16 @@ pub enum PlaybackEvent {
         spotify_uri: String,
         position_ms: u32,
     },
+    /// Context mode: the daemon moved to another entity (a track inside the
+    /// playlist it is playing) on its own. The decorated entity carries the
+    /// metadata riddim's queue would normally supply.
+    ContextTrack {
+        item: soloist::Entity,
+    },
+    /// Context mode: the daemon ran out of music.
+    ContextEnded {
+        spotify_uri: String,
+    },
 }
 
 #[derive(Clone)]
@@ -64,6 +87,10 @@ pub struct Playback {
     client: soloist::Soloist,
     commands: mpsc::UnboundedSender<PlaybackCommand>,
     events: std::sync::Arc<std::sync::Mutex<Option<mpsc::UnboundedReceiver<PlaybackEvent>>>>,
+    /// Set by the controller once the daemon is observed holding a track or
+    /// episode. A daemon that already has content outranks riddim's saved
+    /// playback state (a Connect transfer, for example).
+    engine_holding: Arc<AtomicBool>,
 }
 
 impl Playback {
@@ -85,17 +112,30 @@ impl Playback {
         let (client, soloist_events) = soloist::Soloist::start(api_key).await?;
         let (commands, command_receiver) = mpsc::unbounded_channel();
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
+        let engine_holding = Arc::new(AtomicBool::new(false));
         tokio::spawn(controller(
             client.clone(),
             command_receiver,
             soloist_events,
             event_sender,
+            Arc::clone(&engine_holding),
         ));
         Ok(Self {
             client,
             commands,
             events: std::sync::Arc::new(std::sync::Mutex::new(Some(event_receiver))),
+            engine_holding,
         })
+    }
+
+    /// True once the daemon has been observed holding a track or episode.
+    pub fn engine_holding(&self) -> bool {
+        self.engine_holding.load(AtomicOrdering::Relaxed)
+    }
+
+    /// The shared flag itself, for deferred checks across tasks.
+    pub fn engine_holding_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.engine_holding)
     }
 
     /// The event stream. Yields exactly one receiver per connection lifetime.
@@ -109,6 +149,23 @@ impl Playback {
             playing,
             position_ms,
         });
+    }
+
+    /// Starts a whole Spotify context (playlist, album) by URI. The daemon
+    /// resolves the contents itself and drives the progression; riddim
+    /// observes via [`PlaybackEvent::ContextTrack`].
+    pub fn load_context(&self, spotify_uri: impl Into<String>) {
+        let _ = self.commands.send(PlaybackCommand::LoadContext {
+            spotify_uri: spotify_uri.into(),
+        });
+    }
+
+    pub fn skip_next(&self) {
+        let _ = self.commands.send(PlaybackCommand::SkipNext);
+    }
+
+    pub fn skip_previous(&self) {
+        let _ = self.commands.send(PlaybackCommand::SkipPrevious);
     }
 
     pub fn play(&self) {
@@ -147,12 +204,18 @@ async fn controller(
     mut commands: mpsc::UnboundedReceiver<PlaybackCommand>,
     mut soloist_events: mpsc::UnboundedReceiver<soloist::Event>,
     playback_events: mpsc::UnboundedSender<PlaybackEvent>,
+    engine_holding: Arc<AtomicBool>,
 ) {
     // The last play command riddim issued itself, for correlating the
     // daemon's track-changed events against riddim's own queue moves.
     let mut last_play: Option<(String, Instant)> = None;
     // The track the daemon is currently on, as far as the event stream shows.
     let mut current_uri: Option<String> = None;
+    // True while the daemon is progressing through a context it resolved
+    // itself (riddim played a playlist URI): track advances stay daemon-owned
+    // and surface as [`PlaybackEvent::ContextTrack`] instead of end-of-track
+    // notifications riddim would answer by loading its own next track.
+    let mut context_driven = false;
     let mut status = soloist::PlaybackStatus::Idle;
     // The last known position anchor, for interpolating between syncs.
     let mut anchor: Option<PositionAnchor> = None;
@@ -169,7 +232,9 @@ async fn controller(
                 };
                 match command {
                     PlaybackCommand::Load { spotify_uri, playing, position_ms } => {
+                        context_driven = false;
                         last_play = Some((spotify_uri.clone(), Instant::now()));
+                        engine_holding.store(true, AtomicOrdering::Relaxed);
                         client.command(soloist::Command::Play { uri: Some(soloist_uri(spotify_uri.clone())) });
                         if !playing {
                             client.command(soloist::Command::Pause);
@@ -178,6 +243,19 @@ async fn controller(
                             client.command(soloist::Command::Seek { position_ms });
                         }
                         current_uri = Some(spotify_uri);
+                    }
+                    PlaybackCommand::LoadContext { spotify_uri } => {
+                        context_driven = true;
+                        client.command(soloist::Command::Play {
+                            uri: Some(soloist_uri(spotify_uri)),
+                        });
+                        current_uri = None;
+                    }
+                    PlaybackCommand::SkipNext => {
+                        client.command(soloist::Command::SkipNext);
+                    }
+                    PlaybackCommand::SkipPrevious => {
+                        client.command(soloist::Command::SkipPrev);
                     }
                     PlaybackCommand::Play => client.command(soloist::Command::Play { uri: None }),
                     PlaybackCommand::Pause => client.command(soloist::Command::Pause),
@@ -201,19 +279,37 @@ async fn controller(
                         if let Some(position) = state.position {
                             anchor = Some(PositionAnchor::from(position));
                         }
-                        let item_uri = state
+                        let item = state
                             .item
-                            .map(|item| item.uri)
-                            .filter(|uri| !uri.is_empty());
+                            .filter(|item| !item.uri.is_empty());
+                        let item_uri = item.as_ref().map(|item| item.uri.clone());
+                        if item_uri.is_some() {
+                            engine_holding.store(true, AtomicOrdering::Relaxed);
+                        }
                         match item_uri {
                             Some(uri) if current_uri.as_deref() != Some(uri.as_str()) => {
                                 // The engine moved to a different track. When
                                 // riddim commanded it, the backend already
-                                // knows the old track ended; otherwise it must
-                                // be told.
-                                if !recent_self_play(&last_play, &uri) {
-                                    if let Some(old) = current_uri.take() {
-                                        emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: old });
+                                // knows the old track ended. When the engine
+                                // was mid-play, it advanced on its own (queue
+                                // or autoplay), which also ends the old track.
+                                // While paused or idle, a different track can
+                                // only mean another client took over (a
+                                // Connect transfer): adopt the incoming track
+                                // instead of ending riddim's queue over it.
+                                // In context mode the daemon owns the
+                                // progression and reports the entity itself.
+                                if context_driven {
+                                    if let Some(item) = item {
+                                        emit(&playback_events, PlaybackEvent::ContextTrack { item });
+                                    }
+                                } else if !recent_self_play(&last_play, &uri) {
+                                    if status == soloist::PlaybackStatus::Playing {
+                                        if let Some(old) = current_uri.take() {
+                                            emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: old });
+                                        }
+                                    } else if let Some(item) = item {
+                                        emit(&playback_events, PlaybackEvent::ContextTrack { item });
                                     }
                                 } else {
                                     current_uri.take();
@@ -239,15 +335,31 @@ async fn controller(
                         }
                     }
                     soloist::Event::TrackChanged { item } => {
-                        let uri = item.uri;
+                        let uri = item.uri.clone();
                         if uri.is_empty() || current_uri.as_deref() == Some(uri.as_str()) {
                             continue;
                         }
+                        engine_holding.store(true, AtomicOrdering::Relaxed);
+                        if context_driven {
+                            // The daemon owns the progression; hand the new
+                            // entity to the backend instead of ending tracks.
+                            emit(&playback_events, PlaybackEvent::ContextTrack { item });
+                            current_uri = Some(uri);
+                            continue;
+                        }
                         if !recent_self_play(&last_play, &uri) {
-                            // The engine advanced on its own (queue or
-                            // autoplay): the current track just ended.
-                            if let Some(old) = current_uri.take() {
-                                emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: old });
+                            // While the engine was playing, it advanced on
+                            // its own (queue or autoplay): the current track
+                            // just ended. While paused or idle, another
+                            // client took over: adopt the incoming track.
+                            if status == soloist::PlaybackStatus::Playing {
+                                if let Some(old) = current_uri.take() {
+                                    emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: old });
+                                }
+                            } else {
+                                emit(&playback_events, PlaybackEvent::ContextTrack { item });
+                                current_uri = Some(uri);
+                                continue;
                             }
                         }
                         current_uri = Some(uri.clone());
@@ -268,7 +380,11 @@ async fn controller(
                             // The engine ran out of music: the track ended.
                             (soloist::PlaybackStatus::Idle, Some(uri)) => {
                                 current_uri = None;
-                                emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: uri });
+                                if context_driven {
+                                    emit(&playback_events, PlaybackEvent::ContextEnded { spotify_uri: uri });
+                                } else {
+                                    emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: uri });
+                                }
                             }
                             (_, None) => {}
                         }
@@ -365,6 +481,10 @@ fn api_key_entry() -> Result<Entry> {
     Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT_API_KEY).map_err(Into::into)
 }
 
+fn legacy_api_key_entry() -> Result<Entry> {
+    Entry::new(KEYCHAIN_SERVICE_LEGACY, KEYCHAIN_ACCOUNT_API_KEY).map_err(Into::into)
+}
+
 pub(crate) async fn save_soloist_api_key(api_key: String) -> Result<()> {
     let trimmed = api_key.trim().to_owned();
     if trimmed.is_empty() {
@@ -375,13 +495,27 @@ pub(crate) async fn save_soloist_api_key(api_key: String) -> Result<()> {
 }
 
 pub(crate) async fn load_soloist_api_key() -> Result<Option<String>> {
-    credential_worker::run(|| match api_key_entry()?.get_password() {
+    if let Some(key) = credential_worker::run(|| read_key(api_key_entry()?)).await? {
+        return Ok(Some(key));
+    }
+    // The app was once named dev.twoducks.riddim; a key stored under the
+    // previous service name is invisible to lookups under the current one.
+    // Adopt it rather than reporting the key missing.
+    if let Some(key) = credential_worker::run(|| read_key(legacy_api_key_entry()?)).await? {
+        save_soloist_api_key(key.clone()).await?;
+        log::info!("playback: adopted the Soloist API key stored under the previous service name");
+        return Ok(Some(key));
+    }
+    Ok(None)
+}
+
+fn read_key(entry: keyring::Entry) -> Result<Option<String>> {
+    match entry.get_password() {
         Ok(key) if key.is_empty() => Ok(None),
         Ok(key) => Ok(Some(key)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(anyhow!(error)),
-    })
-    .await
+    }
 }
 
 pub(crate) async fn delete_soloist_api_key() -> Result<()> {

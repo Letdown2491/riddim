@@ -1,6 +1,5 @@
 use std::{
     cell::Cell,
-    collections::{HashMap, HashSet},
     ops::Range,
     rc::Rc,
     sync::Arc,
@@ -12,15 +11,14 @@ use crate::{
     lifecycle::{Instance, InstanceLifecycle},
     model,
     spotify::{self, ClientIdSource, valid_client_id},
-    storage::{AppPreferences, MascotPreference, Store, ThemePreference},
+    storage::{AppPreferences, Store, ThemePreference},
 };
 use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
-    Icon, IndexPath, Sizable, Theme, WindowExt,
+    Icon, Sizable, Theme, WindowExt,
     avatar::Avatar,
     h_flex,
     input::{Input, InputEvent, InputState},
-    select::{Select, SelectEvent, SelectItem, SelectState},
     spinner::Spinner,
     switch::Switch,
     theme::ThemeMode,
@@ -297,7 +295,6 @@ fn uses_compact_player_layout(viewport_width: Pixels, rem_size: Pixels) -> bool 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Route {
     LikedSongs,
-    Favorites,
     Recent,
     Search,
     Playlists,
@@ -357,17 +354,6 @@ fn catalog_data_is_fresh(loaded_at: Option<SystemTime>) -> bool {
     })
 }
 
-fn index_favorites(favorites: &[model::Track]) -> HashMap<model::Provider, HashSet<String>> {
-    let mut index: HashMap<model::Provider, HashSet<String>> = HashMap::new();
-    for track in favorites {
-        index
-            .entry(track.provider)
-            .or_default()
-            .insert(track.source_id.clone());
-    }
-    index
-}
-
 async fn receive_backend_event_batch(
     events: &mut tokio::sync::mpsc::UnboundedReceiver<BackendEvent>,
 ) -> Option<Vec<BackendEvent>> {
@@ -399,7 +385,6 @@ mod page;
 mod playback_clock;
 mod player;
 mod player_bar;
-mod player_mascot;
 mod router;
 mod scrubber;
 mod services;
@@ -420,28 +405,10 @@ pub fn run() {
 #[cfg(test)]
 mod event_bridge_tests {
     use super::{
-        BackendEvent, CATALOG_STALE_TIME, catalog_data_is_fresh, index_favorites, model,
-        next_request_id, receive_backend_event_batch,
+        BackendEvent, CATALOG_STALE_TIME, catalog_data_is_fresh, next_request_id,
+        receive_backend_event_batch,
     };
     use std::time::{Duration, SystemTime};
-
-    fn track(provider: model::Provider, source_id: &str) -> model::Track {
-        model::Track {
-            provider,
-            source_id: source_id.to_owned(),
-            spotify_uri: None,
-            isrc: None,
-            title: source_id.into(),
-            artist: "Artist".into(),
-            artists: Vec::new(),
-            album: "Album".into(),
-            album_ref: None,
-            duration_ms: 1,
-            artwork_url: None,
-            kind: model::MediaKind::Music,
-            release_date: None,
-        }
-    }
 
     #[tokio::test]
     async fn batches_events_that_are_already_queued() {
@@ -483,18 +450,6 @@ mod event_bridge_tests {
         assert!(!catalog_data_is_fresh(Some(
             SystemTime::now() - CATALOG_STALE_TIME - Duration::from_secs(1)
         )));
-    }
-
-    #[test]
-    fn favorite_index_separates_providers_and_deduplicates_tracks() {
-        let spotify = track(model::Provider::Spotify, "same-id");
-        let tidal = track(model::Provider::Tidal, "same-id");
-
-        let index = index_favorites(&[spotify.clone(), spotify, tidal]);
-
-        assert_eq!(index[&model::Provider::Spotify].len(), 1);
-        assert!(index[&model::Provider::Spotify].contains("same-id"));
-        assert!(index[&model::Provider::Tidal].contains("same-id"));
     }
 }
 

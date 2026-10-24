@@ -343,9 +343,9 @@ pub(super) fn spotify_app_change_confirmation(
     confirm: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Div {
     let consequence = if signed_in {
-        "This signs you out, removes the saved Client ID, and restarts Spotify setup. Your Riddim favorites and settings stay."
+        "This signs you out, removes the saved Client ID, and restarts Spotify setup. Your settings stay."
     } else {
-        "This removes the saved Client ID and restarts Spotify setup. Your Riddim favorites and settings stay."
+        "This removes the saved Client ID and restarts Spotify setup. Your settings stay."
     };
     div()
         .absolute()

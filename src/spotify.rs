@@ -251,6 +251,19 @@ fn classify_client_error(error: &rspotify::ClientError) -> ErrorKind {
     }
 }
 
+/// The HTTP status of a failed Web API request, when one is in the chain.
+fn status_of(error: &anyhow::Error) -> Option<u16> {
+    for cause in error.chain() {
+        if let Some(client_error) = cause.downcast_ref::<rspotify::ClientError>()
+            && let rspotify::ClientError::Http(http) = client_error
+            && let rspotify::http::HttpError::StatusCode(response) = http.as_ref()
+        {
+            return Some(response.status().as_u16());
+        }
+    }
+    None
+}
+
 fn convert_saved_track(saved: SavedTrack) -> Result<Option<Track>> {
     if saved.track.is_local || saved.track.id.is_none() {
         return Ok(None);
@@ -497,9 +510,21 @@ impl Spotify {
     pub async fn playlist_tracks(&self, source_id: &str) -> Result<Vec<Track>> {
         let playlist_id = PlaylistId::from_id(source_id)?;
         self.gated(async {
-            self.client
+            let items = self
+                .client
                 .playlist_items(playlist_id, None, None)
-                .map_err(anyhow::Error::from)
+                .map_err(|error| {
+                    let error = anyhow::Error::from(error);
+                    if status_of(&error) == Some(403) {
+                        error.context(
+                            "Spotify only lets Development Mode apps read playlists you own \
+                             or collaborate on; use Play to hand the playlist to the player",
+                        )
+                    } else {
+                        error
+                    }
+                });
+            items
                 .and_then(|item| async move {
                     if item.is_local {
                         return Ok(None);
@@ -661,9 +686,8 @@ impl Spotify {
     /// Resolves URIs one track at a time; Spotify removed the batch tracks
     /// endpoint in March 2026. Lookups overlap a few at a time and a missing
     /// track is skipped. A 429 trips the gate and returns what
-    /// resolved so far: a radio that starts with 29 of 30 tracks beats none,
-    /// and the favorites repair keeps its partial progress. Auth failure is
-    /// fatal: nothing later can succeed.
+    /// resolved so far: a radio that starts with 29 of 30 tracks beats none.
+    /// Auth failure is fatal: nothing later can succeed.
     pub async fn resolve_track_uris(&self, uris: &[String]) -> Result<Vec<Track>> {
         self.resolve_tracks(uris, None).await
     }

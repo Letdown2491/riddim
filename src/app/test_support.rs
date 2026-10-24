@@ -82,7 +82,6 @@ pub(super) fn ready(cx: &mut App) {
         );
         library.handle_backend_event(
             BackendEvent::LocalStateLoaded {
-                favorites: vec![track(0)],
                 pinned_playlists: Vec::new(),
                 recently_played: Vec::new(),
             },

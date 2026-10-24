@@ -18,12 +18,11 @@
 ## Features
 
 - Search tracks and playlists
-- Play music locally with queue, history, favorites, and radio
+- Play music locally with queue, history, and radio
 - Browse native artist and album pages
 - Pin playlists to the sidebar
 - Now Playing and media key controls through MPRIS
 - Light, dark, and system appearances
-- Optional pixel-art player mascot
 - Persistent playback and library state
 
 ## Built With

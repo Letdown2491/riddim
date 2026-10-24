@@ -184,13 +184,28 @@ impl PlaylistPage {
     }
 
     /// Starts the page's contents from the top, if there is anything to play.
+    /// When the contents could not be loaded — Spotify's Development Mode
+    /// restriction keeps followed playlists unreadable through the Web API —
+    /// the whole playlist is handed to the playback daemon instead, which
+    /// resolves it through its own Connect session.
     pub(super) fn play(&mut self, tracks: &Arc<[model::Track]>, cx: &mut Context<Self>) {
-        if tracks.is_empty() {
+        if !tracks.is_empty() {
+            let tracks = tracks.to_vec();
+            self.player
+                .update(cx, |player, cx| player.play_context(tracks, 0, cx));
             return;
         }
-        let tracks = tracks.to_vec();
-        self.player
-            .update(cx, |player, cx| player.play_context(tracks, 0, cx));
+        let restricted = self
+            .selected
+            .as_ref()
+            .filter(|_| self.error.is_some())
+            .filter(|playlist| playlist.provider == model::Provider::Spotify)
+            .map(|playlist| format!("spotify:playlist:{}", playlist.source_id));
+        if let Some(spotify_uri) = restricted {
+            self.player.update(cx, |player, cx| {
+                player.play_spotify_context(spotify_uri, cx)
+            });
+        }
     }
 
     pub(super) fn open(&mut self, playlist: model::Playlist, cx: &mut Context<Self>) {
