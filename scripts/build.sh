@@ -72,9 +72,9 @@ if [ "${1:-}" = "build" ]; then
   # since launchers do not expand ~ or rely on PATH.
   mkdir -p ~/.local/share/applications ~/.local/share/icons/hicolor/scalable/apps
   sed "s|^Exec=.*|Exec=$HOME/.local/bin/riddim|" \
-    packaging/io.github.letdown2491.riddim.desktop \
-    > ~/.local/share/applications/io.github.letdown2491.riddim.desktop
+    self/packaging/io.github.Letdown2491.riddim.desktop \
+    > ~/.local/share/applications/io.github.Letdown2491.riddim.desktop
   cp -f assets/riddim-icon.svg \
-    ~/.local/share/icons/hicolor/scalable/apps/io.github.letdown2491.riddim.svg
+    ~/.local/share/icons/hicolor/scalable/apps/io.github.Letdown2491.riddim.svg
   update-desktop-database ~/.local/share/applications 2>/dev/null || true
 fi
