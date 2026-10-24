@@ -63,6 +63,7 @@ pub enum PlaybackEvent {
         spotify_uri: String,
         position_ms: u32,
     },
+    /// The engine stopped playing `spotify_uri`.
     EndOfTrack {
         spotify_uri: String,
     },

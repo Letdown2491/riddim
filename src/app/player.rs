@@ -4,6 +4,18 @@ use std::time::Instant;
 /// How far playback may drift from the saved position before it is written back.
 const POSITION_SAVE_INTERVAL_MS: u32 = 5_000;
 
+/// How far a reported track end may sit before the extrapolated stopped
+/// position and still count as the track running out. An engine session torn
+/// down by a Connect transfer reports Idle mid-track instead.
+const END_OF_TRACK_SLACK_MS: u32 = 3_000;
+
+/// Whether a track the engine stopped playing had actually run out at
+/// `position_ms`, as opposed to being aborted mid-track by a takeover.
+/// No live track counts as reached, so a stalled advance cannot park playback.
+fn track_reached_end(track: Option<&model::Track>, position_ms: u32) -> bool {
+    track.is_none_or(|track| position_ms + END_OF_TRACK_SLACK_MS >= track.duration_ms)
+}
+
 /// Reported when a playback command could not be delivered to the backend.
 pub(super) struct PlaybackUnavailable;
 
@@ -460,7 +472,16 @@ impl Player {
                 if self.restore.is_none() && self.live_track_matches(&spotify_uri) {
                     self.set_playback(false, cx);
                     self.loading = false;
-                    self.backend.send(BackendCommand::Next);
+                    // The engine also reports Idle when a Connect transfer
+                    // tears its session down mid-track; that is a takeover,
+                    // not a finished track, and advancing here would
+                    // steamroll the transferred session right back. The
+                    // re-anchored clock says where playback audibly stopped
+                    // (pauses included), so only a track that actually ran
+                    // out moves the queue on.
+                    if track_reached_end(self.now_playing.as_ref(), self.clock.anchor_ms()) {
+                        self.backend.send(BackendCommand::Next);
+                    }
                 }
             }
             BackendEvent::PositionChanged {
@@ -519,5 +540,53 @@ impl Player {
         }
         cx.notify();
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(duration_ms: u32) -> model::Track {
+        model::Track {
+            provider: model::Provider::Spotify,
+            source_id: "3USOTQdPtZlgVurwaqsdI5".into(),
+            spotify_uri: Some("spotify:track:3USOTQdPtZlgVurwaqsdI5".into()),
+            isrc: None,
+            title: "Fuck Her Gently".into(),
+            artist: "Tenacious D".into(),
+            artists: Vec::new(),
+            album: "Tenacious D".into(),
+            album_ref: None,
+            duration_ms,
+            artwork_url: None,
+            kind: model::MediaKind::default(),
+            release_date: None,
+        }
+    }
+
+    #[test]
+    fn a_track_stopped_far_from_its_end_is_an_aborted_takeover() {
+        // The Fuck Her Gently transfer: 8 seconds into a 2:04 track, the
+        // engine's session was torn down by the phone taking over.
+        assert!(!track_reached_end(Some(&track(124_000)), 8_000));
+    }
+
+    #[test]
+    fn a_track_stopped_at_its_end_advances() {
+        assert!(track_reached_end(Some(&track(124_000)), 124_000));
+        assert!(track_reached_end(Some(&track(124_000)), 123_000));
+    }
+
+    #[test]
+    fn a_stale_position_past_the_end_still_counts_as_ended() {
+        // The position is extrapolated while the engine plays; an engine that
+        // stops syncing before the end reports late.
+        assert!(track_reached_end(Some(&track(124_000)), 140_000));
+    }
+
+    #[test]
+    fn without_a_live_track_the_advance_cannot_park() {
+        assert!(track_reached_end(None, 0));
     }
 }
