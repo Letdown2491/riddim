@@ -1,0 +1,182 @@
+# Release: tag v* builds the flatpak (one leg per architecture), attaches
+# the bundles to the GitHub release, then publishes to Orchard (the Nostr
+# flatpak store, github.com/Letdown2491/orchard) with orchard-publish.
+#
+# One listing, both architectures, mirroring orchard's own self-publish and
+# backchat's release: each runner builds its own arch and signs its own
+# asset (per-arch `d` tag and registry tag), while the listing declaring
+# coverage for both is identical from either leg, so the relays dedupe it.
+#
+# Secrets:
+#   ORCHARD_NSEC            the publisher's Nostr key (never in the repo)
+#   GITHUB_TOKEN            ghcr push (packages:write) and the orchard.txt
+#                           proof write (--prove, contents:write)
+#
+# The proof file (orchard.txt at the repo root) is written by --prove on the
+# x86_64 publish leg: it names the publisher npub, and Orchard reads it to
+# show the repository link as verified. It needs the repository public.
+
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  APP_ID: io.github.Letdown2491.riddim
+  # orchard's publish tool, pinned: tag + expected commit (a moved tag fails
+  # the build instead of building something else). TODO: bump to the tag that
+  # carries the screenshots feature (listings grow `screenshot` tags; older
+  # pins still publish, silently without them).
+  ORCHARD_TAG: v0.1.2
+  ORCHARD_COMMIT: 087940634e83b436f96591fec4a5cc193c704383
+  REGISTRY: ghcr.io/letdown2491/riddim-flatpak
+
+jobs:
+  flatpak:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: linux-x86_64
+            runner: ubuntu-24.04
+          - arch: linux-aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version from the tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            flatpak flatpak-builder ostree elfutils librsvg2-common
+          # elfutils: the debuginfo strip shells out to eu-strip on the
+          # host. librsvg2-common: the appstream compose rasterizes the
+          # app's SVG icon through gdk-pixbuf; without the loader the
+          # compose dies with a file-read-error (the committed 512px PNG
+          # covers the catalog, the loader matters for the scalable).
+          flatpak --user remote-add --if-not-exists flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install freedesktop 25.08 + rust sdk extension
+        run: |
+          flatpak --user install -y --noninteractive flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+
+      - name: Vendor crate sources (flatpak builds offline)
+        run: |
+          rustup toolchain install stable --profile minimal
+          cargo +stable vendor vendor
+
+      - name: Build the flatpak
+        run: |
+          flatpak-builder --user --force-clean --repo=repo \
+            self/tree self/packaging/io.github.Letdown2491.riddim.yml
+
+      - name: Bundle
+        run: |
+          mkdir -p bundles
+          flatpak build-bundle repo \
+            "bundles/riddim-${{ steps.ver.outputs.version }}-${{ matrix.arch }}.flatpak" \
+            "$APP_ID" stable
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
+            --generate-notes --verify-tag 2>/dev/null || true
+          gh release upload "$GITHUB_REF_NAME" bundles/*.flatpak --clobber
+
+      - name: Save the staged tree for the publish job
+        # flatpak-builder leaves the app tree staged exactly as a
+        # flatpak checkout looks (files/, export/, metadata, var/),
+        # which is the tree orchard-publish packs; the bundle has no
+        # part in that. var/run is a symlink to /run in that staging;
+        # the publish tool's size walk follows directory symlinks and
+        # would cross into the host's /run and die on root-only
+        # /run/sudo
+        run: tar -C self/tree --exclude=var/run -czf app-tree.tar.gz export files metadata var
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-tree-${{ matrix.arch }}
+          path: app-tree.tar.gz
+          retention-days: 1
+
+  orchard:
+    needs: flatpak
+    strategy:
+      # one publish leg per arch, mirroring the build matrix. needs holds
+      # each leg for the whole build matrix: a failed arch publishes
+      # nothing, which is the right shape for a release
+      matrix:
+        include:
+          - arch: linux-x86_64
+            runner: ubuntu-24.04
+            prove: true
+          - arch: linux-aarch64
+            runner: ubuntu-24.04-arm
+            prove: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version from the tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the staged tree
+        uses: actions/download-artifact@v4
+        with:
+          name: app-tree-${{ matrix.arch }}
+
+      - name: Build orchard-publish from Orchard's pinned tag
+        run: |
+          git clone --quiet --depth 1 --branch "$ORCHARD_TAG" \
+            https://github.com/Letdown2491/orchard /tmp/orchard
+          test "$(git -C /tmp/orchard rev-parse HEAD)" = "$ORCHARD_COMMIT"
+          rustup toolchain install stable --profile minimal
+          # build from the clone's own directory: cargo reads
+          # .cargo/config.toml from the CWD chain, and riddim's checkout
+          # config must never leak into the publisher's build
+          cd /tmp/orchard
+          cargo +stable build --release --locked -p orchard-publish
+          sudo install -m755 target/release/orchard-publish \
+            /usr/local/bin/orchard-publish
+
+      - name: Unpack the staged tree
+        run: |
+          mkdir -p self/tree/app-tree
+          tar -xzf app-tree.tar.gz -C self/tree/app-tree
+          ls self/tree/app-tree
+
+      - name: Publish to Orchard (live)
+        env:
+          ORCHARD_PUBLISH_VERSION: ${{ steps.ver.outputs.version }}
+          ORCHARD_NSEC: ${{ secrets.ORCHARD_NSEC }}
+          ORCHARD_REGISTRY_USER: ${{ github.actor }}
+          ORCHARD_REGISTRY_PASSWORD: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --arch overrides the manifest's build arch for this leg; the
+          # asset's `d` tag and the registry tag carry it, and the
+          # runtime string is rewritten to match. --prove (x86_64 leg
+          # only, the write is idempotent) refreshes orchard.txt on the
+          # default branch so the repository link verifies in clients.
+          PROVE_FLAG=""
+          if [ "${{ matrix.prove }}" = "true" ]; then PROVE_FLAG="--prove"; fi
+          cd self/packaging
+          orchard-publish "io.github.Letdown2491.riddim.publish.toml" \
+            --arch "${{ matrix.arch }}" \
+            --registry "$REGISTRY" --tag "latest-${{ matrix.arch }}" \
+            --out /tmp/orchard-out $PROVE_FLAG

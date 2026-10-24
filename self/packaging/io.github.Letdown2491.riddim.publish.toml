@@ -1,0 +1,52 @@
+# Orchard (https://github.com/Letdown2491/orchard) listing for the Flatpak.
+#
+# Read by `orchard-publish`. The CI release workflow (.github/workflows/
+# release.yml) runs it on tags; self/packaging/README.md has the manual loop.
+# ORCHARD_PUBLISH_VERSION (set from the tag) overrides [release] version.
+
+[app]
+id = "io.github.Letdown2491.riddim"
+name = "riddim"
+summary = "A minimal Spotify player for Linux"
+description-file = "description.md"
+# Must be a PNG: Orchard caches icons without extensions, and an SVG then
+# fails to render. Absolute URL: the store fetches it over HTTP, it cannot
+# read the publisher's disk. The same raster the launcher installs.
+icon = "https://raw.githubusercontent.com/Letdown2491/riddim/main/self/packaging/io.github.Letdown2491.riddim.png"
+# Screenshots (image URLs, one `screenshot` tag each on the listing) are
+# supported from Orchard v0.2.1 (prepared in the orchard repo, not yet
+# pushed); the pinned publisher silently drops the field until then.
+# First candidate, ready to uncomment on a pin bump:
+# screenshots = [
+#     "https://raw.githubusercontent.com/Letdown2491/riddim/main/assets/riddim-liked.png",
+# ]
+categories = ["Audio & Video"]
+license = "MIT"
+repository = "https://github.com/Letdown2491/riddim"
+homepage = "https://github.com/Letdown2491/riddim"
+
+[release]
+# Placeholder. The workflow sets ORCHARD_PUBLISH_VERSION from the tag.
+version = "0.1.0"
+channel = "stable"
+arch = "linux-x86_64"
+# The listing declares coverage for both arches and is identical from
+# either publish leg (the relays dedupe it); each CI leg passes --arch
+# for its own build, which also rewrites the runtime's arch.
+platforms = ["linux-x86_64", "linux-aarch64"]
+# Keep in step with runtime-version in the flatpak manifest; the CI legs
+# rewrite the arch per build.
+runtime = "org.freedesktop.Platform/x86_64/25.08"
+notes = "Release notes: https://github.com/Letdown2491/riddim/releases"
+
+[artifact]
+# Staged by the workflow before orchard-publish runs; gitignored.
+tree = "../tree/app-tree"
+
+[publish]
+# relay.orchard.rocks must come first: orchard-publish refuses a manifest
+# without it.
+relays = ["wss://relay.orchard.rocks", "wss://nos.lol", "wss://relay.primal.net"]
+tag = "latest"
+# No author-name or nip05: either one makes orchard-publish sign a kind 0
+# profile, which would replace the publisher's Nostr profile.

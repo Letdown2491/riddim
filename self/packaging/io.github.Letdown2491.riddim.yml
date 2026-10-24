@@ -1,0 +1,67 @@
+id: io.github.Letdown2491.riddim
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+# the branch build-export/build-bundle/publish address; flatpak-builder's
+# default is master, which nothing downstream looks at
+default-branch: stable
+command: riddim
+
+finish-args:
+  # windowing: wayland primary, X11 fallback; dri for Vulkan (GPUI renders
+  # through a Vulkan driver)
+  - --socket=wayland
+  - --socket=x11
+  - --device=dri
+  # spotify web api, the oauth callback server on 127.0.0.1:8888, and the
+  # soloist daemon riddim downloads and keeps updated
+  - --share=network
+  # soloist plays through alsa, which pipewire and pulseaudio servers provide
+  - --device=alsa
+  # the desktop keyring (secret service) holds the oauth token and the
+  # soloist api key
+  - --talk-name=org.freedesktop.secrets
+  # mpris: media keys and now playing ride the session bus under this name
+  - --own-name=org.mpris.MediaPlayer2.riddim
+  # portal access for desktop settings (cursor theme, dark mode)
+  - --talk-name=org.freedesktop.portal.Desktop
+
+modules:
+  - name: riddim
+    buildsystem: simple
+    builddir: true
+    build-options:
+      env:
+        CARGO_HOME: /run/build/riddim/cargo
+        # the workspace pins gpui's Linux stack: fontconfig, freetype,
+        # xkbcommon (pkg-config in the SDK) and clang for bindgen
+    build-commands:
+      # the sandbox has no network: point cargo at the vendored sources the
+      # checkout carries (generated locally by scripts/vendor.sh and in CI by
+      # the release workflow). appended, not written, because the checkout's
+      # .cargo/config.toml already sets build env
+      - mkdir -p .cargo && printf '\n[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' >> .cargo/config.toml
+      - source /usr/lib/sdk/rust-stable/enable.sh && cargo build --release --offline
+      - install -Dm755 target/release/riddim "${FLATPAK_DEST}/bin/riddim"
+      - install -Dm644 self/packaging/io.github.Letdown2491.riddim.desktop
+        "${FLATPAK_DEST}/share/applications/io.github.Letdown2491.riddim.desktop"
+      - install -Dm644 assets/riddim-icon.svg
+        "${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/io.github.Letdown2491.riddim.svg"
+      # the raster beside the scalable: the appstream compose rasterizes
+      # icons for its catalog, and a raster source needs no SVG loader;
+      # the launcher reads either
+      - install -Dm644 self/packaging/io.github.Letdown2491.riddim.png
+        "${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/io.github.Letdown2491.riddim.png"
+      - install -Dm644 self/packaging/io.github.Letdown2491.riddim.metainfo.xml
+        "${FLATPAK_DEST}/share/metainfo/io.github.Letdown2491.riddim.metainfo.xml"
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - target
+          - self/tree
+          - .cache
+          - .data

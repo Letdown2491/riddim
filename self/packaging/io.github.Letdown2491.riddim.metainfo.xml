@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.Letdown2491.riddim</id>
+  <name>riddim</name>
+  <summary>A minimal Spotify player for Linux</summary>
+  <developer id="io.github.letdown2491">
+    <name>Letdown2491</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <url type="homepage">https://github.com/Letdown2491/riddim</url>
+
+  <description>
+    <p>
+      riddim is a minimal Spotify player for Linux: search tracks and
+      playlists, play with queue, history, and radio, browse artist and
+      album pages, and pin playlists to the sidebar. Native, responsive,
+      and typically around 120 MB of RAM.
+    </p>
+    <p>
+      Playback runs on Soloist, Spotify's official headless player, which
+      riddim downloads and keeps updated; Now Playing and media keys go
+      through MPRIS. Requires Spotify Premium and a one-time setup: your
+      own Spotify developer app for the library connection, then pairing
+      the riddim playback device from any Spotify app. The full
+      walkthrough ships in the app's first-run screens.
+    </p>
+    <p>
+      riddim is a Linux port of Cadence by Miho, a Spotify player for
+      macOS; same engine, same design, with riddim's own mark and
+      interface icons.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.Letdown2491.riddim.desktop</launchable>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Music</category>
+    <category>Player</category>
+  </categories>
+
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-10-24">
+      <description>
+        <p>First release: search and library, playback with queue,
+        history, and radio, artist and album pages, pinned playlists,
+        MPRIS media keys, and light, dark, and system appearances.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -11,3 +11,7 @@
 # Local tooling artifacts
 .beads.gate.lock
 .playwright-mcp/
+
+# flatpak-builder's work area
+self/tree/
+vendor/
