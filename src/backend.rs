@@ -837,7 +837,8 @@ async fn run(
         Ok(startup) => startup,
         Err(acknowledged) => return acknowledged,
     };
-    let mut worker = Worker::new(startup, events);
+    let (daemon_events, mut daemon_events_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut worker = Worker::new(startup, events, daemon_events);
     if let Err(acknowledged) = worker.boot(&mut commands, &mut shutdown).await {
         return acknowledged;
     }
@@ -847,6 +848,10 @@ async fn run(
         let command = tokio::select! {
             command = controls.recv() => command?,
             command = commands.recv() => command?,
+            Some(event) = daemon_events_rx.recv() => {
+                worker.observe_daemon_track(event);
+                continue;
+            }
             _ = wait_for_shutdown(&mut shutdown) => {
                 worker.session.finish_pending_logout().await;
                 return receive_shutdown_acknowledgment(&mut commands).await;
@@ -862,7 +867,7 @@ async fn run(
                 continue;
             }
             reconnected = finished(&mut worker.connection.reconnect) => {
-                worker.connection.finish_reconnect(reconnected, &worker.events);
+                worker.connection.finish_reconnect(reconnected, &worker.events, &worker.daemon_events);
                 if let Some((tracks, index)) = worker.connection.pending_play.take()
                     && let Err(error) = worker.play_context(tracks, index).await
                 {
@@ -905,6 +910,9 @@ type Finished<T> = Option<Result<T, tokio::task::JoinError>>;
 /// services that own the in-flight work.
 struct Worker {
     events: UnboundedSender<BackendEvent>,
+    /// Raw player events the adoption observer mirrors back here, so the
+    /// queue can follow a session the daemon drives itself.
+    daemon_events: UnboundedSender<PlaybackEvent>,
     store: BlockingStore,
     spotify: Spotify,
     configuration: Option<SpotifyConfiguration>,
@@ -919,9 +927,14 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(startup: Startup, events: UnboundedSender<BackendEvent>) -> Self {
+    fn new(
+        startup: Startup,
+        events: UnboundedSender<BackendEvent>,
+        daemon_events: UnboundedSender<PlaybackEvent>,
+    ) -> Self {
         Self {
             events,
+            daemon_events,
             store: startup.store,
             spotify: startup.spotify,
             configuration: startup.configuration,
@@ -933,6 +946,40 @@ impl Worker {
             radio: Radio::default(),
             autoplay: Autoplay::default(),
             session: SessionTasks::default(),
+        }
+    }
+
+    /// Keeps the queue bookkeeping aligned with a session the daemon drives
+    /// itself. Without this the queue still holds whatever riddim played
+    /// last, and the next skip, resume, or restore would load that stale
+    /// queue straight over the daemon's live content.
+    fn observe_daemon_track(&mut self, event: PlaybackEvent) {
+        match event {
+            PlaybackEvent::ContextTrack { item } => {
+                let Some(track) = track_from_soloist_entity(&item) else {
+                    log::info!("playback: daemon track could not be adopted: {}", item.uri);
+                    return;
+                };
+                log::info!("playback: adopting daemon-driven context: {}", item.uri);
+                // The daemon owns the progression now: park riddim's own
+                // queue so skips and restores go to the daemon, never back
+                // into riddim's list.
+                self.queue.context = Some(
+                    track
+                        .spotify_uri
+                        .clone()
+                        .unwrap_or_else(|| format!("spotify:track:{}", track.source_id)),
+                );
+                self.queue.tracks = vec![track];
+                self.queue.index = Some(0);
+                self.queue.position_ms = 0;
+                self.queue.ended = false;
+            }
+            PlaybackEvent::ContextEnded { .. } => {
+                self.queue.ended = true;
+                self.queue.position_ms = 0;
+            }
+            _ => {}
         }
     }
 
@@ -1372,6 +1419,19 @@ impl Worker {
     }
 
     async fn restore_playback(&mut self, position_ms: u32, playing: bool) -> Result<()> {
+        log::info!(
+            "playback: restore requested at {position_ms}ms (playing {playing}, context {:?})",
+            self.queue.context
+        );
+        // In context mode the daemon holds a session riddim does not own;
+        // confirm the restore without reloading anything over it.
+        if self.queue.context.is_some() {
+            let _ = self.events.send(BackendEvent::PlaybackRestored {
+                position_ms,
+                playing,
+            });
+            return Ok(());
+        }
         let result = restore_context_track(
             &self.connection.player,
             &self.queue.tracks,
@@ -1414,6 +1474,16 @@ impl Worker {
     }
 
     fn resume(&mut self) -> Result<()> {
+        // In context mode the daemon holds the session; a plain play just
+        // resumes it. The ended-restore below would reload riddim's own
+        // queue straight over the daemon's content.
+        if self.queue.context.is_some() {
+            let result = self.connected_player().map(|player| player.play());
+            if result.is_err() {
+                let _ = self.events.send(BackendEvent::PlaybackSettled);
+            }
+            return result;
+        }
         if self.queue.ended {
             // play() is a no-op in librespot's EndOfTrack state: reload the
             // current track at the seeker's position instead.
@@ -1456,6 +1526,12 @@ impl Worker {
     }
 
     async fn next_track(&mut self) -> Result<()> {
+        log::info!(
+            "playback: skip next (context {:?}, index {:?} of {})",
+            self.queue.context,
+            self.queue.index,
+            self.queue.tracks.len()
+        );
         self.radio.cancel(&self.events);
         // The daemon owns the progression in context mode; a skip is a
         // daemon command, not a queue move.
@@ -1530,6 +1606,11 @@ impl Worker {
 
     /// Loads the queue entry at `index` and persists it as the playing track.
     async fn load_queue_track(&mut self, index: usize) -> Result<()> {
+        log::info!(
+            "playback: loading queue track {index} of {}: {:?}",
+            self.queue.tracks.len(),
+            self.queue.tracks.get(index).map(|track| &track.source_id)
+        );
         let result = load_context_track(
             &self.connection.player,
             &self.queue.tracks,
@@ -1611,7 +1692,8 @@ impl Worker {
         match connected {
             Some(Ok(Ok(player))) => {
                 log::info!("playback: connected");
-                self.connection.adopt(player, &self.events);
+                self.connection
+                    .adopt(player, &self.events, &self.daemon_events);
                 if let Err(error) = self.store.set_playback_credentials_invalidated(false).await {
                     send_error(&self.events, error);
                 }
@@ -1780,6 +1862,11 @@ impl Worker {
     /// is read inside the task and re-checked when the result lands, so a
     /// toggle takes effect without replumbing.
     fn maybe_prefetch_autoplay(&mut self) {
+        // In context mode the daemon owns the progression; a prefetch would
+        // only exist to steamroll it.
+        if self.queue.context.is_some() {
+            return;
+        }
         let Some(index) = self.queue.index else {
             return;
         };
@@ -1853,6 +1940,11 @@ impl Worker {
             .get(index)
             .map(|track| track.source_id.as_str());
         if seed_id.as_deref() != current_seed {
+            log::info!(
+                "playback: autoplay prefetch stale (seed {:?}, queue on {:?})",
+                seed_id,
+                current_seed
+            );
             return;
         }
         // The listener may have switched autoplay off while this ran.
@@ -1876,6 +1968,11 @@ impl Worker {
                 .filter(|track| !known.contains(track.source_id.as_str()))
                 .collect()
         };
+        log::info!(
+            "playback: autoplay extension for seed {:?}: {} new tracks",
+            seed_id,
+            additions.len()
+        );
         if additions.is_empty() {
             // Radio had nothing new for this seed; autoplay rests here the
             // way Spotify's does when its well runs dry.
@@ -2232,8 +2329,13 @@ impl PlaybackConnection {
         }
     }
 
-    fn adopt(&mut self, player: Playback, events: &UnboundedSender<BackendEvent>) {
-        self.observer = Some(observe_playback(&player, events));
+    fn adopt(
+        &mut self,
+        player: Playback,
+        events: &UnboundedSender<BackendEvent>,
+        daemon_events: &UnboundedSender<PlaybackEvent>,
+    ) {
+        self.observer = Some(observe_playback(&player, events, daemon_events));
         self.player = Some(player);
     }
 
@@ -2279,12 +2381,13 @@ impl PlaybackConnection {
         &mut self,
         reconnected: Finished<Result<Playback>>,
         events: &UnboundedSender<BackendEvent>,
+        daemon_events: &UnboundedSender<PlaybackEvent>,
     ) {
         self.reconnect = None;
         match reconnected {
             Some(Ok(Ok(player))) => {
                 log::info!("playback: reconnected");
-                self.adopt(player, events);
+                self.adopt(player, events, daemon_events);
                 self.reconnect_pending = false;
                 let _ = events.send(BackendEvent::PlaybackReconnected);
             }
@@ -2528,14 +2631,19 @@ async fn logout_account(store: BlockingStore, spotify: Spotify) -> Result<()> {
 fn observe_playback(
     player: &Playback,
     events: &UnboundedSender<BackendEvent>,
+    daemon_events: &UnboundedSender<PlaybackEvent>,
 ) -> tokio::task::JoinHandle<()> {
     let Some(mut player_events) = player.events() else {
         log::error!("playback: the event stream was already taken");
         return tokio::spawn(async {});
     };
     let event_sender = events.clone();
+    let daemon_sender = daemon_events.clone();
     tokio::spawn(async move {
         while let Some(event) = player_events.recv().await {
+            // Mirror the raw event to the worker: it keeps its own queue
+            // bookkeeping aligned with daemon-driven sessions.
+            let _ = daemon_sender.send(event.clone());
             let event = match event {
                 PlaybackEvent::Loading { spotify_uri } => {
                     Some(BackendEvent::Loading { spotify_uri })

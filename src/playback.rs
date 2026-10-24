@@ -290,25 +290,17 @@ async fn controller(
                             Some(uri) if current_uri.as_deref() != Some(uri.as_str()) => {
                                 // The engine moved to a different track. When
                                 // riddim commanded it, the backend already
-                                // knows the old track ended. When the engine
-                                // was mid-play, it advanced on its own (queue
-                                // or autoplay), which also ends the old track.
-                                // While paused or idle, a different track can
-                                // only mean another client took over (a
-                                // Connect transfer): adopt the incoming track
-                                // instead of ending riddim's queue over it.
-                                // In context mode the daemon owns the
-                                // progression and reports the entity itself.
-                                if context_driven {
+                                // knows the old track ended. Any other move
+                                // means the daemon is progressing through a
+                                // session of its own — a Connect transfer, or
+                                // the queue of whoever transferred — so adopt
+                                // the incoming track instead of ending
+                                // riddim's queue over it: steamrolling a live
+                                // session is exactly what riddim must never
+                                // do.
+                                if !recent_self_play(&last_play, &uri) {
+                                    context_driven = true;
                                     if let Some(item) = item {
-                                        emit(&playback_events, PlaybackEvent::ContextTrack { item });
-                                    }
-                                } else if !recent_self_play(&last_play, &uri) {
-                                    if status == soloist::PlaybackStatus::Playing {
-                                        if let Some(old) = current_uri.take() {
-                                            emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: old });
-                                        }
-                                    } else if let Some(item) = item {
                                         emit(&playback_events, PlaybackEvent::ContextTrack { item });
                                     }
                                 } else {
@@ -340,28 +332,21 @@ async fn controller(
                             continue;
                         }
                         engine_holding.store(true, AtomicOrdering::Relaxed);
-                        if context_driven {
-                            // The daemon owns the progression; hand the new
-                            // entity to the backend instead of ending tracks.
+                        if !recent_self_play(&last_play, &uri) {
+                            // The daemon moved to a track riddim did not
+                            // load: it owns the progression now (a Connect
+                            // transfer, or the queue of whoever
+                            // transferred). Adopt the incoming track; a
+                            // foreign track is never "the old track ended"
+                            // — the daemon does not advance riddim's own
+                            // single-track loads by itself.
+                            context_driven = true;
                             emit(&playback_events, PlaybackEvent::ContextTrack { item });
                             current_uri = Some(uri);
                             continue;
                         }
-                        if !recent_self_play(&last_play, &uri) {
-                            // While the engine was playing, it advanced on
-                            // its own (queue or autoplay): the current track
-                            // just ended. While paused or idle, another
-                            // client took over: adopt the incoming track.
-                            if status == soloist::PlaybackStatus::Playing {
-                                if let Some(old) = current_uri.take() {
-                                    emit(&playback_events, PlaybackEvent::EndOfTrack { spotify_uri: old });
-                                }
-                            } else {
-                                emit(&playback_events, PlaybackEvent::ContextTrack { item });
-                                current_uri = Some(uri);
-                                continue;
-                            }
-                        }
+                        // riddim commanded this load: the backend already
+                        // knows the old track ended.
                         current_uri = Some(uri.clone());
                         emit(&playback_events, PlaybackEvent::Loading { spotify_uri: uri });
                     }
