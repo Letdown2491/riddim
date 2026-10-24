@@ -12,6 +12,9 @@ directories = "6.0"
 env_logger = "0.11"
 flate2 = "1"
 futures = "0.3"
+# Fresh per-attempt OAuth `state` nonces; rspotify already pulls this in for
+# its own PKCE verifier, so this adds no new crate to the build.
+getrandom = "0.3"
 gpui-kit = "0.7.0"
 # keyring's default `v1` mode covers macOS Keychain, the Windows credential
 # store, and the Linux Secret Service (zbus) in one dependency.

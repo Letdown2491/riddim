@@ -388,7 +388,10 @@ impl Player {
     }
 
     /// Applies the playback half of a backend event, returning the event when the
-    /// surrounding app still has its own work to do for it.
+    /// surrounding app still has its own work to do for it. Only a matched event
+    /// that changed rendered state asks for a rebuild: position and play-state
+    /// reports for a track that is not live flow through guarded arms at playback
+    /// cadence, and repainting the whole window for them is wasted work.
     pub(super) fn handle_backend_event(
         &mut self,
         event: BackendEvent,
@@ -398,12 +401,14 @@ impl Player {
             BackendEvent::PlaybackReady => {
                 self.error = None;
                 self.backend.send(BackendCommand::SetVolume(self.volume));
+                cx.notify();
             }
             BackendEvent::PlaybackReconnecting => {
                 if self.restore.is_none() && self.now_playing.is_some() {
                     self.restore = Some((self.clock.anchor_ms(), self.playing));
                 }
                 self.loading = true;
+                cx.notify();
             }
             BackendEvent::PlaybackReconnected => {
                 self.error = None;
@@ -416,6 +421,7 @@ impl Player {
                 } else {
                     self.loading = false;
                 }
+                cx.notify();
             }
             BackendEvent::PlaybackRestored {
                 position_ms,
@@ -427,10 +433,12 @@ impl Player {
                 self.set_playback(playing, cx);
                 self.loading = false;
                 self.restore = None;
+                cx.notify();
             }
             BackendEvent::PlaybackSettled => {
                 self.loading = false;
                 self.restore = None;
+                cx.notify();
             }
             BackendEvent::QueueEnded => {
                 self.set_playback(false, cx);
@@ -441,17 +449,20 @@ impl Player {
                 self.saved_position_ms = 0;
                 // The daemon-owned context ran out of music.
                 self.context_uri = None;
+                cx.notify();
             }
             BackendEvent::Playing { spotify_uri } => {
                 if self.restore.is_none() && self.live_track_matches(&spotify_uri) {
                     self.set_playback(true, cx);
                     self.loading = false;
                     self.record_first_play();
+                    cx.notify();
                 }
             }
             BackendEvent::Loading { spotify_uri } => {
                 if self.restore.is_none() && self.live_track_matches(&spotify_uri) {
                     self.loading = true;
+                    cx.notify();
                 }
             }
             BackendEvent::Paused { spotify_uri } => {
@@ -466,6 +477,7 @@ impl Player {
                         });
                         self.saved_position_ms = position_ms;
                     }
+                    cx.notify();
                 }
             }
             BackendEvent::EndOfTrack { spotify_uri } => {
@@ -482,6 +494,7 @@ impl Player {
                     if track_reached_end(self.now_playing.as_ref(), self.clock.anchor_ms()) {
                         self.backend.send(BackendCommand::Next);
                     }
+                    cx.notify();
                 }
             }
             BackendEvent::PositionChanged {
@@ -492,6 +505,7 @@ impl Player {
                     self.clock
                         .report(position_ms, cx.background_executor().now());
                     self.save_position_if_moved(spotify_uri, position_ms);
+                    cx.notify();
                 }
             }
             BackendEvent::PlaybackSnapshotLoaded {
@@ -507,6 +521,7 @@ impl Player {
                 self.set_playback(false, cx);
                 self.loading = false;
                 self.history_pending = true;
+                cx.notify();
             }
             BackendEvent::PlaybackContext { current, next } => {
                 let changed = self.now_playing.as_ref().is_none_or(|track| {
@@ -520,9 +535,11 @@ impl Player {
                     self.saved_position_ms = 0;
                     self.restore = None;
                 }
+                cx.notify();
             }
             BackendEvent::PlaybackFailed(error) => {
                 self.error = Some(error.into());
+                cx.notify();
             }
             BackendEvent::TrackFailed { spotify_uri, error } => {
                 // librespot parks on a track it cannot open rather than
@@ -538,7 +555,6 @@ impl Player {
             }
             event => return Some(event),
         }
-        cx.notify();
         None
     }
 }

@@ -22,13 +22,16 @@ use crate::{
     spotify::{
         ClientIdSource, Spotify, SpotifyConfiguration, resolve_configuration, valid_client_id,
     },
-    storage::{PlaybackSnapshot, Store},
+    storage::{PlaybackSnapshot, Store, ThemePreference},
 };
 
 const CATALOG_TIMEOUT_SECONDS: u64 = 30;
 const LIBRARY_TIMEOUT_SECONDS: u64 = 60;
 const COMMAND_CAPACITY: usize = 256;
 const CONTROL_CAPACITY: usize = 8;
+
+/// How many recently played tracks a local-state broadcast carries.
+const RECENT_TRACKS_LIMIT: usize = 100;
 
 struct AuthorizationSuccess {
     playback: Option<PlaybackConnectionRequest>,
@@ -111,8 +114,31 @@ impl BlockingStore {
     }
 
     async fn local_state(&self) -> Result<(Vec<Playlist>, Vec<Track>)> {
-        self.call(|store| Ok((store.pinned_playlists()?, store.recent_tracks(100)?)))
+        self.call(|store| {
+            Ok((
+                store.pinned_playlists()?,
+                store.recent_tracks(RECENT_TRACKS_LIMIT)?,
+            ))
+        })
+        .await
+    }
+
+    async fn recent_tracks(&self, limit: usize) -> Result<Vec<Track>> {
+        self.call(move |store| store.recent_tracks(limit)).await
+    }
+
+    async fn set_theme_preference(&self, preference: ThemePreference) -> Result<()> {
+        self.call(move |store| store.set_theme_preference(preference))
             .await
+    }
+
+    async fn set_sidebar_collapsed(&self, collapsed: bool) -> Result<()> {
+        self.call(move |store| store.set_sidebar_collapsed(collapsed))
+            .await
+    }
+
+    async fn set_autoplay(&self, autoplay: bool) -> Result<()> {
+        self.call(move |store| store.set_autoplay(autoplay)).await
     }
 
     async fn cached_library(&self) -> Result<CachedLibrary> {
@@ -246,6 +272,15 @@ pub type ArtistDetails = (Artist, Vec<Track>, Vec<Album>);
 pub type AlbumDetails = (Album, Vec<Track>);
 pub type ShowDetails = (Show, Vec<Track>);
 
+/// Which search results a catalog search fetches. The search page shows one
+/// tab at a time, so it fetches the kind it is showing and the other one
+/// lazily when first visited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchKind {
+    Tracks,
+    Playlists,
+}
+
 #[derive(Debug)]
 pub enum BackendCommand {
     Authenticate {
@@ -269,6 +304,8 @@ pub enum BackendCommand {
     },
     SearchCatalog {
         query: String,
+        /// The tab the search page is showing; the other kind is not fetched.
+        kind: SearchKind,
         respond: Reply<TrackAndPlaylistResults>,
     },
     LoadPlaylist {
@@ -309,6 +346,12 @@ pub enum BackendCommand {
     AppendToQueue(Track),
     /// The track started playing, so it belongs in the listening history.
     MarkPlayed(Track),
+    /// Preference writes ride the storage worker: the caller updates its
+    /// in-memory copy and queues the durable write here, where the backend's
+    /// own re-reads of the preferences (autoplay, for one) see it in order.
+    SetThemePreference(ThemePreference),
+    SetSidebarCollapsed(bool),
+    SetAutoplay(bool),
     RestorePlayback {
         position_ms: u32,
         playing: bool,
@@ -639,6 +682,9 @@ struct Startup {
     spotify: Spotify,
     configuration: Option<SpotifyConfiguration>,
     playback_snapshot: Option<PlaybackSnapshot>,
+    /// The pinned playlists the boot local-state broadcast carried, so the
+    /// worker can re-broadcast them without re-reading them.
+    pinned_playlists: Option<Vec<Playlist>>,
 }
 
 /// The error carries the shutdown acknowledgment when the app quit before
@@ -656,7 +702,8 @@ async fn start(
         }
     };
     log::info!("startup: store opened");
-    send_local_state(&store, events).await;
+    let mut pinned_playlists = None;
+    send_local_state(&store, events, &mut pinned_playlists).await;
     let playback_snapshot = match store.playback_state().await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -823,6 +870,7 @@ async fn start(
         spotify,
         configuration,
         playback_snapshot,
+        pinned_playlists,
     })
 }
 
@@ -914,6 +962,9 @@ struct Worker {
     /// queue can follow a session the daemon drives itself.
     daemon_events: UnboundedSender<PlaybackEvent>,
     store: BlockingStore,
+    /// The pinned playlists as the last local-state broadcast carried them,
+    /// so a history update can re-broadcast them without re-reading them.
+    pinned_playlists: Option<Vec<Playlist>>,
     spotify: Spotify,
     configuration: Option<SpotifyConfiguration>,
     account_generation: u64,
@@ -936,6 +987,7 @@ impl Worker {
             events,
             daemon_events,
             store: startup.store,
+            pinned_playlists: startup.pinned_playlists,
             spotify: startup.spotify,
             configuration: startup.configuration,
             account_generation: 0,
@@ -1084,8 +1136,13 @@ impl Worker {
                 self.reload_library(respond);
                 Ok(())
             }
-            BackendCommand::SearchCatalog { query, respond } => {
-                self.catalog.search(self.spotify.clone(), query, respond);
+            BackendCommand::SearchCatalog {
+                query,
+                kind,
+                respond,
+            } => {
+                self.catalog
+                    .search(self.spotify.clone(), query, kind, respond);
                 Ok(())
             }
             BackendCommand::LoadPlaylist { playlist, respond } => {
@@ -1131,6 +1188,13 @@ impl Worker {
             BackendCommand::Resume => self.resume(),
             BackendCommand::Pause => self.pause(),
             BackendCommand::MarkPlayed(track) => self.mark_played(track).await,
+            BackendCommand::SetThemePreference(preference) => {
+                self.store.set_theme_preference(preference).await
+            }
+            BackendCommand::SetSidebarCollapsed(collapsed) => {
+                self.store.set_sidebar_collapsed(collapsed).await
+            }
+            BackendCommand::SetAutoplay(autoplay) => self.store.set_autoplay(autoplay).await,
             BackendCommand::Next => self.next_track().await,
             BackendCommand::Previous => self.previous_track().await,
             BackendCommand::Seek(position_ms) => self.seek(position_ms).await,
@@ -1463,13 +1527,33 @@ impl Worker {
 
     async fn mark_played(&mut self, track: Track) -> Result<()> {
         self.store.add_history(track).await?;
-        send_local_state(&self.store, &self.events).await;
+        // History only moves the recent list, and this runs once per track
+        // start: a full local-state reload would re-read every pinned
+        // playlist each time. Re-broadcast the pinned playlists this worker
+        // already loaded with a fresh recent list instead.
+        let pinned_playlists = match self.pinned_playlists.clone() {
+            Some(pinned_playlists) => pinned_playlists,
+            None => {
+                // The boot broadcast never succeeded; do the full read.
+                send_local_state(&self.store, &self.events, &mut self.pinned_playlists).await;
+                return Ok(());
+            }
+        };
+        match self.store.recent_tracks(RECENT_TRACKS_LIMIT).await {
+            Ok(recently_played) => {
+                let _ = self.events.send(BackendEvent::LocalStateLoaded {
+                    pinned_playlists,
+                    recently_played,
+                });
+            }
+            Err(error) => send_error(&self.events, error),
+        }
         Ok(())
     }
 
     async fn set_playlist_pinned(&mut self, playlist: Playlist, pinned: bool) -> Result<()> {
         self.store.set_playlist_pinned(playlist, pinned).await?;
-        send_local_state(&self.store, &self.events).await;
+        send_local_state(&self.store, &self.events, &mut self.pinned_playlists).await;
         Ok(())
     }
 
@@ -2179,12 +2263,26 @@ impl CatalogFetches {
         ));
     }
 
-    fn search(&mut self, spotify: Spotify, query: String, respond: Reply<TrackAndPlaylistResults>) {
+    fn search(
+        &mut self,
+        spotify: Spotify,
+        query: String,
+        kind: SearchKind,
+        respond: Reply<TrackAndPlaylistResults>,
+    ) {
+        // The search page shows one tab at a time, so only the kind it is
+        // showing is fetched; it asks for the other when first visited.
         Self::start(&mut self.search, respond, "Spotify search", async move {
-            tokio::try_join!(
-                spotify.search_tracks(&query),
-                spotify.search_playlists(&query)
-            )
+            match kind {
+                SearchKind::Tracks => {
+                    let tracks = spotify.search_tracks(&query).await?;
+                    Ok((tracks, Vec::new()))
+                }
+                SearchKind::Playlists => {
+                    let playlists = spotify.search_playlists(&query).await?;
+                    Ok((Vec::new(), playlists))
+                }
+            }
         });
     }
 
@@ -2902,11 +3000,19 @@ fn build_radio_context(seed: Track, recommendations: Vec<Track>) -> Result<Vec<T
     Ok(tracks)
 }
 
-async fn send_local_state(store: &BlockingStore, events: &UnboundedSender<BackendEvent>) {
+/// Loads the whole local state from the store and broadcasts it, leaving the
+/// pinned playlists it read in `pinned_playlists` so a history update can
+/// re-broadcast them without re-reading them.
+async fn send_local_state(
+    store: &BlockingStore,
+    events: &UnboundedSender<BackendEvent>,
+    pinned_playlists: &mut Option<Vec<Playlist>>,
+) {
     match store.local_state().await {
-        Ok((pinned_playlists, recently_played)) => {
+        Ok((pinned, recently_played)) => {
+            *pinned_playlists = Some(pinned.clone());
             let _ = events.send(BackendEvent::LocalStateLoaded {
-                pinned_playlists,
+                pinned_playlists: pinned,
                 recently_played,
             });
         }

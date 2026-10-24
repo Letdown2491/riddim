@@ -198,6 +198,23 @@ impl Fixture {
         ));
     }
 
+    /// Preference writes ride backend commands (so the storage worker can
+    /// commit them off the UI thread); everything else reaching the backend
+    /// from an interaction is a bug.
+    fn no_commands_beyond_preferences(&mut self) {
+        while let Ok(command) = self.backend.commands.try_recv() {
+            assert!(
+                matches!(
+                    command,
+                    BackendCommand::SetThemePreference(_)
+                        | BackendCommand::SetSidebarCollapsed(_)
+                        | BackendCommand::SetAutoplay(_)
+                ),
+                "expected at most a preference write, got {command:?}"
+            );
+        }
+    }
+
     /// The pointer half of a scrub, split so a test can act between the press
     /// and the release. `TestWindowExt::drag` only does the whole gesture.
     fn mouse_down(&mut self, position: Point<gpui_kit::Pixels>) {
@@ -370,7 +387,7 @@ fn autoplay_switch_updates_preferences_and_rendered_state() {
         assert!(services::AppServices::preferences(cx).autoplay);
         assert_eq!(window.find("settings-autoplay").checked(), Some(true));
     });
-    fixture.no_commands();
+    fixture.no_commands_beyond_preferences();
 }
 
 #[test]
@@ -396,7 +413,7 @@ fn tab_rings_the_autoplay_switch_and_space_toggles_it() {
         assert_eq!(window.find("settings-autoplay").checked(), Some(false));
         assert!(autoplay_ring_visible(window, cx));
     });
-    fixture.no_commands();
+    fixture.no_commands_beyond_preferences();
 }
 
 #[test]

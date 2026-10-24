@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 
 use anyhow::{Context as _, Result, bail};
 use tokio::{
@@ -36,14 +39,21 @@ pub(crate) async fn receive_callback(
     listener: &TcpListener,
     expected_path: &str,
 ) -> Result<OAuthCallback> {
+    // Only answer requests addressed to this listener: during the window
+    // anything else that hits the port is a probe, not the browser redirect.
+    let expected_host = host_header(&listener.local_addr()?);
     timeout(AUTHORIZATION_TIMEOUT, async {
         loop {
             let (mut stream, _) = listener.accept().await?;
-            let Ok(Ok(target)) = timeout(REQUEST_TIMEOUT, read_request_target(&mut stream)).await
+            let Ok(Ok((target, host))) =
+                timeout(REQUEST_TIMEOUT, read_request_target(&mut stream)).await
             else {
                 continue;
             };
-            let Ok(url) = Url::parse(&format!("http://127.0.0.1{target}")) else {
+            if host.as_deref() != Some(expected_host.as_str()) {
+                continue;
+            }
+            let Ok(url) = Url::parse(&format!("http://{expected_host}{target}")) else {
                 continue;
             };
             if url.path() == expected_path {
@@ -55,7 +65,20 @@ pub(crate) async fn receive_callback(
     .context("OAuth callback timed out")?
 }
 
-async fn read_request_target(reader: &mut (impl AsyncRead + Unpin)) -> Result<String> {
+/// The `Host` header value a browser sends for this listener's address.
+fn host_header(address: &SocketAddr) -> String {
+    match address.ip() {
+        IpAddr::V6(ip) => format!("[{ip}]:{}", address.port()),
+        IpAddr::V4(ip) => format!("{ip}:{}", address.port()),
+    }
+}
+
+/// Reads the request target and the `Host` header. HTTP/1.0 may legally omit
+/// `Host`, but a request whose origin cannot be verified is as good as a
+/// forged one, so a missing header is rejected just like a mismatched one.
+async fn read_request_target(
+    reader: &mut (impl AsyncRead + Unpin),
+) -> Result<(String, Option<String>)> {
     let mut request = Vec::with_capacity(1024);
     let mut chunk = [0_u8; 1024];
     loop {
@@ -73,8 +96,8 @@ async fn read_request_target(reader: &mut (impl AsyncRead + Unpin)) -> Result<St
     }
 
     let request = std::str::from_utf8(&request).context("OAuth callback headers are not UTF-8")?;
-    let mut parts = request
-        .lines()
+    let mut lines = request.lines();
+    let mut parts = lines
         .next()
         .context("OAuth callback omitted the request line")?
         .split_whitespace();
@@ -93,7 +116,13 @@ async fn read_request_target(reader: &mut (impl AsyncRead + Unpin)) -> Result<St
     if !target.starts_with('/') {
         bail!("OAuth callback request target is invalid");
     }
-    Ok(target.to_owned())
+    let host = lines.take_while(|line| !line.is_empty()).find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("host")
+            .then(|| value.trim().to_owned())
+    });
+    Ok((target.to_owned(), host))
 }
 
 #[cfg(test)]
@@ -108,13 +137,64 @@ mod tests {
         let mut client = TcpStream::connect(address).await.unwrap();
         client.write_all(b"GET /call").await.unwrap();
         client
-            .write_all(b"back?code=secret HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .write_all(
+                format!(
+                    "back?code=secret HTTP/1.1\r\nHost: {}\r\n\r\n",
+                    host_header(&address)
+                )
+                .as_bytes(),
+            )
             .await
             .unwrap();
 
         let callback = receiver.await.unwrap().unwrap();
         assert_eq!(callback.url().path(), "/callback");
         assert_eq!(callback.url().query(), Some("code=secret"));
+    }
+
+    #[tokio::test]
+    async fn ignores_requests_with_foreign_host_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let receiver = tokio::spawn(async move { receive_callback(&listener, "/callback").await });
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(b"GET /callback?code=forged HTTP/1.1\r\nHost: evil.example\r\n\r\n")
+            .await
+            .unwrap();
+
+        // The forged request is skipped, so a later redirect is still the
+        // one that wins.
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(
+                format!(
+                    "GET /callback?code=real HTTP/1.1\r\nHost: {}\r\n\r\n",
+                    host_header(&address)
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+
+        let callback = receiver.await.unwrap().unwrap();
+        assert_eq!(callback.url().query(), Some("code=real"));
+    }
+
+    #[tokio::test]
+    async fn reports_missing_host_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(b"GET /callback?code=secret HTTP/1.0\r\n\r\n")
+            .await
+            .unwrap();
+        let (mut stream, _) = listener.accept().await.unwrap();
+
+        let (target, host) = read_request_target(&mut stream).await.unwrap();
+        assert_eq!(target, "/callback?code=secret");
+        assert_eq!(host, None);
     }
 
     #[tokio::test]

@@ -190,10 +190,7 @@ impl AppServices {
     ) -> Option<anyhow::Result<()>> {
         let services = cx.global_mut::<Self>();
         services.preferences.theme = preference;
-        services
-            .store
-            .as_mut()
-            .map(|store| store.set_theme_preference(preference))
+        Self::queue_preference(BackendCommand::SetThemePreference(preference), cx)
     }
 
     pub(super) fn set_sidebar_collapsed(
@@ -202,19 +199,27 @@ impl AppServices {
     ) -> Option<anyhow::Result<()>> {
         let services = cx.global_mut::<Self>();
         services.preferences.sidebar_collapsed = collapsed;
-        services
-            .store
-            .as_mut()
-            .map(|store| store.set_sidebar_collapsed(collapsed))
+        Self::queue_preference(BackendCommand::SetSidebarCollapsed(collapsed), cx)
     }
 
     pub(super) fn set_autoplay(autoplay: bool, cx: &mut App) -> Option<anyhow::Result<()>> {
         let services = cx.global_mut::<Self>();
         services.preferences.autoplay = autoplay;
-        services
-            .store
-            .as_mut()
-            .map(|store| store.set_autoplay(autoplay))
+        Self::queue_preference(BackendCommand::SetAutoplay(autoplay), cx)
+    }
+
+    /// Queues a durable preference write on the backend's storage worker
+    /// instead of upserting on the UI thread, reporting whether the write was
+    /// queued. The backend's own re-reads of the preferences (autoplay, for
+    /// one) run on that worker too, so they see the write in order; a worker
+    /// that cannot take the write reports it later as a backend error event.
+    fn queue_preference(command: BackendCommand, cx: &App) -> Option<anyhow::Result<()>> {
+        let backend = cx.global::<Self>().backend.as_ref()?;
+        Some(if backend.handle().send(command) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("the Riddim backend is not running"))
+        })
     }
 
     /// Revalidates the library on a timer, backstopping the activation
@@ -399,8 +404,8 @@ pub(super) fn preference_save_error(
     Some(format!("Could not save {preference} preference: {error}").into())
 }
 
-/// Counts missing settings storage as a failed save, for a preference the
-/// backend reads back from disk.
+/// Counts a preference write that never got queued as a failed save, for a
+/// preference the backend reads back from disk.
 pub(super) fn require_settings_storage(result: Option<anyhow::Result<()>>) -> anyhow::Result<()> {
     result.unwrap_or_else(|| Err(anyhow::anyhow!("settings storage is unavailable")))
 }

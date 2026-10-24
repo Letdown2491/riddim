@@ -6,6 +6,8 @@
 
 use super::*;
 
+use gpui_kit::ImageSource;
+
 /// The keyboard focus ring's stroke, the same physical width as `border_2`.
 const FOCUS_RING_WIDTH: Pixels = px(2.);
 
@@ -390,6 +392,25 @@ pub(super) fn artwork(
     artwork_size: tokens::ArtworkSize,
     fallback_icon: RiddimIcon,
 ) -> gpui_kit::AnyElement {
+    artwork_source(
+        palette,
+        image_cache,
+        url.map(Into::into),
+        artwork_size,
+        fallback_icon,
+    )
+}
+
+/// Like [`artwork`], for callers that already hold the image source (built
+/// once when the page took its data) and hand it over by clone instead of
+/// reallocating it every frame.
+pub(super) fn artwork_source(
+    palette: RiddimPalette,
+    image_cache: &Entity<image_cache::BoundedImageCache>,
+    source: Option<ImageSource>,
+    artwork_size: tokens::ArtworkSize,
+    fallback_icon: RiddimIcon,
+) -> gpui_kit::AnyElement {
     let frame = div()
         .size(artwork_size.size)
         .flex_none()
@@ -398,10 +419,10 @@ pub(super) fn artwork(
         .bg(rgb(palette.selection))
         .border_1()
         .border_color(palette.media_border);
-    if let Some(url) = url {
+    if let Some(source) = source {
         frame
             .child(
-                img(url.to_owned())
+                img(source)
                     .image_cache(image_cache)
                     .size_full()
                     .rounded(artwork_size.radius)

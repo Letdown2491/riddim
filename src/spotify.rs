@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use base64::Engine as _;
 use futures::TryStreamExt;
 use gpui_kit::SharedString;
 use keyring::Entry;
@@ -276,6 +277,15 @@ fn normalized_client_id(client_id: &str) -> Option<String> {
     (!client_id.is_empty()).then(|| client_id.to_owned())
 }
 
+/// A fresh CSRF nonce for one authorization attempt, carried in the OAuth
+/// `state` parameter: 32 random bytes from the OS entropy pool, URL-safe
+/// base64 so the browser round-trips them unchanged.
+fn authorization_nonce() -> Result<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).context("the OS entropy source is unavailable")?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
 #[derive(Clone)]
 pub struct Spotify {
     client: AuthCodePkceSpotify,
@@ -349,6 +359,12 @@ impl Spotify {
         let listener = TcpListener::bind("127.0.0.1:8888")
             .await
             .context("could not listen for the Spotify authorization callback")?;
+        // A nonce per attempt, not per client: rspotify only compares the
+        // callback's `state` against the stored value, so reusing one nonce
+        // across attempts would let a copied sign-in URL complete a later
+        // login.
+        let state = authorization_nonce()?;
+        self.client.oauth.state = state.clone();
         let authorize_url = self.client.get_authorize_url(None)?;
         tokio::task::spawn_blocking(move || open::that(authorize_url))
             .await
@@ -358,6 +374,14 @@ impl Spotify {
         let mut callback = receive_callback(&listener, "/callback")
             .await
             .context("could not receive the Spotify authorization callback")?;
+        let returned_state = callback
+            .url()
+            .query_pairs()
+            .find(|(key, _)| key == "state")
+            .map(|(_, value)| value.into_owned());
+        if returned_state.as_deref() != Some(state.as_str()) {
+            bail!("Spotify returned a mismatched authorization state; start the sign-in again");
+        }
         let code = self
             .client
             .parse_response_code(callback.url().as_str())

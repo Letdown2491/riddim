@@ -1,7 +1,7 @@
 use super::*;
 use gpui_kit::TestSupportExt as _;
 
-use gpui_kit::ClickEvent;
+use gpui_kit::{ClickEvent, ImageSource};
 
 /// Breathing room between the Title column and whatever follows it.
 const COLUMN_GUTTER: Rems = Rems(1.);
@@ -56,6 +56,17 @@ fn ellipsized_line() -> Div {
 
 type RowCallback = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
+/// Per-row strings a list formats once when it takes a new track slice, so
+/// rows share them by clone instead of rebuilding them every frame.
+#[derive(Clone, Default)]
+pub(super) struct RowAssets {
+    /// The row's group name, which the actions button's hover visibility
+    /// keys off.
+    pub(super) row_group: SharedString,
+    /// The track's artwork source, handed to `img` by clone.
+    pub(super) artwork: Option<ImageSource>,
+}
+
 /// One track in a list.
 ///
 /// Stateless: the list that shows it decides whether it is current or has its
@@ -64,7 +75,11 @@ type RowCallback = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 #[derive(IntoElement)]
 pub(super) struct TrackRow {
     index: usize,
-    track: model::Track,
+    /// The slice the row's track lives in, shared with the list so the row
+    /// borrows its track instead of cloning it.
+    tracks: Arc<[model::Track]>,
+    /// The row's preformatted strings; see [`RowAssets`].
+    assets: RowAssets,
     palette: RiddimPalette,
     image_cache: Entity<image_cache::BoundedImageCache>,
     compact: bool,
@@ -79,13 +94,15 @@ pub(super) struct TrackRow {
 impl TrackRow {
     pub(super) fn new(
         index: usize,
-        track: model::Track,
+        tracks: Arc<[model::Track]>,
+        assets: RowAssets,
         palette: RiddimPalette,
         image_cache: Entity<image_cache::BoundedImageCache>,
     ) -> Self {
         Self {
             index,
-            track,
+            tracks,
+            assets,
             palette,
             image_cache,
             compact: false,
@@ -136,9 +153,9 @@ impl RenderOnce for TrackRow {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
         let palette = self.palette;
         let index = self.index;
+        let row_group = self.assets.row_group.clone();
+        let track = &self.tracks[index];
         let rem_size = window.rem_size();
-        let row_group: SharedString =
-            format!("spotify-track-row:{}:{index}", self.track.source_id).into();
         components::button(palette, ("spotify-track", index))
             .test_support()
             .group(row_group.clone())
@@ -171,10 +188,10 @@ impl RenderOnce for TrackRow {
                     .flex()
                     .items_center()
                     .gap_2p5()
-                    .child(components::artwork(
+                    .child(components::artwork_source(
                         palette,
                         &self.image_cache,
-                        self.track.artwork_url.as_deref(),
+                        self.assets.artwork.clone(),
                         tokens::TRACK_ARTWORK,
                         RiddimIcon::MusicNote,
                     ))
@@ -192,13 +209,13 @@ impl RenderOnce for TrackRow {
                                     .text_size(tokens::BODY_TEXT)
                                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .text_color(rgb(palette.text_primary))
-                                    .child(self.track.title.clone()),
+                                    .child(track.title.clone()),
                             )
                             .child(
                                 ellipsized_line()
                                     .text_xs()
                                     .text_color(rgb(palette.text_muted))
-                                    .child(self.track.artist.clone()),
+                                    .child(track.artist.clone()),
                             ),
                     ),
             )
@@ -208,7 +225,7 @@ impl RenderOnce for TrackRow {
                         ellipsized_line()
                             .text_size(tokens::BODY_TEXT)
                             .text_color(rgb(palette.text))
-                            .child(self.track.album.clone()),
+                            .child(track.album.clone()),
                     ),
                 )
             })
@@ -222,7 +239,7 @@ impl RenderOnce for TrackRow {
                     .pr_2()
                     .text_size(tokens::BODY_TEXT)
                     .text_color(rgb(palette.text_muted))
-                    .child(format_duration(self.track.duration_ms)),
+                    .child(format_duration(track.duration_ms)),
             )
             .child(
                 div()

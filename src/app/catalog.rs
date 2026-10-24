@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::SearchKind as ResultKind;
 
 use page::PageEvent;
 use track_list::{PlaylistList, TrackList};
@@ -32,6 +33,14 @@ where
     }
 }
 
+/// The tab index of `kind`, keying the per-kind search state.
+fn search_slot(kind: SearchKind) -> usize {
+    match kind {
+        SearchKind::Tracks => 0,
+        SearchKind::Playlists => 1,
+    }
+}
+
 /// Search results for the current query.
 pub(super) struct SearchPage {
     backend: BackendHandle,
@@ -42,8 +51,11 @@ pub(super) struct SearchPage {
     kind: SearchKind,
     tracks: Arc<[model::Track]>,
     playlists: Arc<[model::Playlist]>,
-    loaded: bool,
-    searching: bool,
+    /// Whether each kind has results for `results_query`. The inactive tab
+    /// loads lazily the first time the listener switches to it.
+    loaded: [bool; 2],
+    /// The kind with a search in flight, if any.
+    searching: Option<SearchKind>,
     error: Option<SharedString>,
     request: Option<gpui_kit::Task<()>>,
     track_list: Entity<TrackList>,
@@ -64,8 +76,8 @@ impl SearchPage {
             kind: SearchKind::Tracks,
             tracks: Arc::default(),
             playlists: Arc::default(),
-            loaded: false,
-            searching: false,
+            loaded: [false; 2],
+            searching: None,
             error: None,
             request: None,
             _list_subscriptions: [
@@ -84,6 +96,15 @@ impl SearchPage {
 
     pub(super) fn set_kind(&mut self, kind: SearchKind, cx: &mut Context<Self>) {
         self.kind = kind;
+        // The inactive tab loads lazily: the first visit after a search
+        // fetches what the search used to fetch up front. Re-clicking a tab
+        // whose fetch failed tries again, since a failed kind never counts
+        // as loaded.
+        let slot = search_slot(kind);
+        if !self.loaded[slot] && self.searching != Some(kind) && !self.results_query.is_empty() {
+            let query = self.results_query.clone();
+            self.search_kind(kind, query, cx);
+        }
         cx.notify();
     }
 
@@ -93,24 +114,47 @@ impl SearchPage {
         if query.is_empty() {
             return false;
         }
-        self.loaded = false;
-        self.searching = true;
+        self.loaded = [false; 2];
         self.error = None;
-        let reply = request(&self.backend, {
-            let query = query.clone();
-            |respond| BackendCommand::SearchCatalog { query, respond }
+        // The old results answer a query that is no longer showing, and the
+        // kind not being fetched now loads lazily, so drop both.
+        self.tracks = Arc::default();
+        self.playlists = Arc::default();
+        self.results_query = query.clone();
+        self.search_kind(self.kind, query, cx);
+        cx.notify();
+        true
+    }
+
+    /// Fetches `kind` for `query`, replacing any search still in flight. The
+    /// reply only updates the kind it fetched: the other tab keeps its own
+    /// loading state until the listener visits it.
+    fn search_kind(&mut self, kind: SearchKind, query: String, cx: &mut Context<Self>) {
+        self.searching = Some(kind);
+        let reply = request(&self.backend, move |respond| {
+            BackendCommand::SearchCatalog {
+                query,
+                kind: match kind {
+                    SearchKind::Tracks => ResultKind::Tracks,
+                    SearchKind::Playlists => ResultKind::Playlists,
+                },
+                respond,
+            }
         });
         self.request = Some(cx.spawn(async move |this, cx| {
             let result = reply.await;
             let _ = this.update(cx, |page, cx| {
                 page.request = None;
-                page.searching = false;
-                page.loaded = true;
+                page.searching = None;
                 match result {
                     Ok((tracks, playlists)) => {
-                        page.results_query = query;
-                        page.tracks = tracks.into();
-                        page.playlists = playlists.into();
+                        if kind == SearchKind::Tracks {
+                            page.loaded[search_slot(SearchKind::Tracks)] = true;
+                            page.tracks = tracks.into();
+                        } else {
+                            page.loaded[search_slot(SearchKind::Playlists)] = true;
+                            page.playlists = playlists.into();
+                        }
                         page.error = None;
                         cx.emit(PageEvent::Loaded);
                     }
@@ -122,8 +166,6 @@ impl SearchPage {
                 cx.notify();
             });
         }));
-        cx.notify();
-        true
     }
 
     /// Takes down any open row menu, for a route change no click drove.
@@ -136,8 +178,8 @@ impl SearchPage {
         self.results_query.clear();
         self.tracks = Arc::default();
         self.playlists = Arc::default();
-        self.loaded = false;
-        self.searching = false;
+        self.loaded = [false; 2];
+        self.searching = None;
         self.error = None;
         cx.notify();
     }
@@ -604,8 +646,8 @@ impl Render for SearchPage {
         let query = self.query.clone();
         let tracks = self.tracks.clone();
         let playlists = self.playlists.clone();
-        let searching = self.searching;
-        let loaded = self.loaded;
+        let searching = self.searching == Some(kind);
+        let loaded = self.loaded[search_slot(kind)];
         let results = if self.error.is_some() {
             components::empty_state(palette, "Unable to search Spotify").into_any_element()
         } else if kind == SearchKind::Tracks && !tracks.is_empty() {

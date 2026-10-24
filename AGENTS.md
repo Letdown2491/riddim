@@ -66,11 +66,12 @@ everywhere else. Tests pick the modifier with `primary_modifier()`.
 ## Spotify Auth
 
 The authorization flow is documented for users in
-`docs/spotify-setup.md`. It covers both connections: the Web API under the
-user's developer app (`127.0.0.1:8888/callback`) and playback under the
-built-in player identity (`127.0.0.1:8898/login`, scope `streaming`). If you
-change scopes, ports, or token storage in `src/spotify.rs` or
-`src/playback.rs`, update that page in the same commit.
+`docs/spotify-setup.md`. Riddim has one browser OAuth flow: the Web API
+under the user's developer app (`127.0.0.1:8888/callback`, PKCE, with a
+fresh `state` nonce and a Host check per sign-in). Playback needs no OAuth
+flow — it runs through the Soloist daemon, which uses its own API key and
+Spotify Connect pairing. If you change scopes, ports, or token storage in
+`src/spotify.rs`, update that page in the same commit.
 
 ## Naming
 

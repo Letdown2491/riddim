@@ -15,7 +15,10 @@ pub(super) struct TrackList {
     tracks: Arc<[model::Track]>,
     /// The row whose action menu is open, keyed by source ID and row index so
     /// the same track appearing twice opens only the row that was clicked.
-    menu_open: Option<String>,
+    menu_open: Option<(String, usize)>,
+    /// Per-row strings formatted when `tracks` last changed, so rows never
+    /// rebuild them per frame.
+    row_assets: Vec<track_row::RowAssets>,
     /// Album already on screen, whose "Go to album" entry would go nowhere.
     current_album_id: Option<String>,
     player: Entity<player::Player>,
@@ -30,6 +33,7 @@ impl TrackList {
             id: None,
             tracks: Arc::default(),
             menu_open: None,
+            row_assets: Vec::new(),
             current_album_id: None,
             player: services::AppServices::player(cx),
             image_cache: services::AppServices::image_cache(cx),
@@ -54,6 +58,15 @@ impl TrackList {
         }
         self.id = id;
         self.tracks = tracks;
+        self.row_assets = self
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(index, track)| track_row::RowAssets {
+                row_group: format!("spotify-track-row:{}:{index}", track.source_id).into(),
+                artwork: track.artwork_url.as_deref().map(Into::into),
+            })
+            .collect();
         self.menu_open = None;
         cx.notify();
     }
@@ -77,26 +90,43 @@ impl TrackList {
     }
 
     fn row(&mut self, index: usize, compact: bool, cx: &mut Context<Self>) -> AnyElement {
-        let Some(track) = self.tracks.get(index).cloned() else {
+        let Some(track) = self.tracks.get(index) else {
             return div().into_any_element();
         };
         let palette = appearance::Appearance::palette(cx);
-        let is_current_track = self.player.read(cx).is_current_track(&track);
-        let menu_key = format!("{}:{index}", track.source_id);
-        let menu_open = self.menu_open.as_deref() == Some(menu_key.as_str());
+        let is_current_track = self.player.read(cx).is_current_track(track);
+        let menu_open = self
+            .menu_open
+            .as_ref()
+            .is_some_and(|(source_id, menu_index)| {
+                menu_index == &index && source_id == &track.source_id
+            });
         let menu = menu_open
-            .then(|| self.action_menu(&track, index, is_current_track, cx))
+            .then(|| self.action_menu(track, index, is_current_track, cx))
             .map(IntoElement::into_any_element);
-        track_row::TrackRow::new(index, track, palette, self.image_cache.clone())
-            .compact(compact)
-            .current(is_current_track)
-            .menu(menu_open, menu)
-            .on_play(cx.listener(move |this, _, _, cx| this.play_from(index, cx)))
-            .on_toggle_menu(cx.listener(move |this, _, _, cx| {
-                this.menu_open = (!menu_open).then(|| menu_key.clone());
-                cx.notify();
-            }))
-            .into_any_element()
+        let assets = self.row_assets.get(index).cloned().unwrap_or_default();
+        track_row::TrackRow::new(
+            index,
+            self.tracks.clone(),
+            assets,
+            palette,
+            self.image_cache.clone(),
+        )
+        .compact(compact)
+        .current(is_current_track)
+        .menu(menu_open, menu)
+        .on_play(cx.listener(move |this, _, _, cx| this.play_from(index, cx)))
+        .on_toggle_menu(cx.listener(move |this, _, _, cx| {
+            this.menu_open = if menu_open {
+                None
+            } else {
+                this.tracks
+                    .get(index)
+                    .map(|track| (track.source_id.clone(), index))
+            };
+            cx.notify();
+        }))
+        .into_any_element()
     }
 
     fn play_from(&mut self, index: usize, cx: &mut Context<Self>) {

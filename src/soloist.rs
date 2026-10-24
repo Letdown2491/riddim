@@ -6,6 +6,19 @@
 //! daemon owns the Spotify Connect session (paired once from any Spotify
 //! app) and the audio output; riddim is a remote control plus UI.
 //!
+//! # Trust model
+//!
+//! The managed daemon is downloaded over TLS from Spotify's CDN, which
+//! publishes no signatures or checksum files for the release archives (the
+//! URL is unversioned and updated in place), so TLS is the only integrity
+//! control; the smoke check proves the binary executes, not where it came
+//! from. Two further limitations are inherent to the daemon's CLI, not
+//! riddim: the API key can only be passed as a command-line argument
+//! (readable via `/proc/<pid>/cmdline` by other processes of the same user),
+//! and the WebSocket API has no authentication. Local same-user processes
+//! are therefore within the trust boundary. Revisit all three if Spotify
+//! ever ships signed manifests or auth options.
+//!
 //! [Soloist]: https://developer.spotify.com/documentation/soloist
 
 use std::{
@@ -47,6 +60,10 @@ const REFRESH_AFTER: Duration = Duration::from_secs(60 * 24 * 60 * 60);
 const REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Whole-download budget for fetching a release archive.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+/// Upper bound on a release archive's size. The real archives are tens of
+/// MiB; the cap stops a broken server (or a rerouted one) from streaming
+/// unbounded data onto disk before extraction is ever attempted.
+const MAX_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 
 /// A running Soloist daemon: either spawned by this process (owned, killed on
 /// drop) or adopted from a previous run that died without cleaning up.
@@ -81,6 +98,7 @@ impl Daemon {
         };
         if daemon.endpoint_files().is_some() {
             log::info!("soloist: adopting already-running daemon");
+            daemon.restrict_endpoint_files();
             return Ok(daemon);
         }
         daemon.spawn().await?;
@@ -92,6 +110,10 @@ impl Daemon {
         let child = ProcessCommand::new(&self.binary_path)
             .arg("--device-name")
             .arg("Riddim")
+            // The daemon's CLI accepts the API key only as an argument; no
+            // environment-variable or stdin path exists. This exposes the
+            // key via /proc/<pid>/cmdline to other same-user processes, an
+            // accepted daemon limitation (see the module trust model).
             .arg("--api-key")
             .arg(&self.api_key)
             // Port 0 lets the OS pick a free port; the daemon writes the real
@@ -129,6 +151,7 @@ impl Daemon {
         let deadline = tokio::time::Instant::now() + ENDPOINT_TIMEOUT;
         loop {
             if self.endpoint_files().is_some() {
+                self.restrict_endpoint_files();
                 return Ok(());
             }
             if let Some(status) = self.try_wait_child().await? {
@@ -148,6 +171,21 @@ impl Daemon {
         match self.child.as_mut() {
             Some(child) => Ok(child.try_wait()?),
             None => Ok(None),
+        }
+    }
+
+    /// Tightens the endpoint files to owner-only. The daemon writes them
+    /// world-readable; they name an unauthenticated localhost API, so other
+    /// local users should not learn the port from them (the OS-assigned port
+    /// is not a secret, but locking the files down is free).
+    fn restrict_endpoint_files(&self) {
+        for name in ["ws.addr", "ws.port"] {
+            let path = self.data_dir.join(name);
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                let mut permissions = metadata.permissions();
+                permissions.set_mode(0o600);
+                let _ = std::fs::set_permissions(&path, permissions);
+            }
         }
     }
 
@@ -811,6 +849,18 @@ async fn binary_fallback(error: anyhow::Error) -> Result<PathBuf> {
     ))
 }
 
+/// The download client: same TLS-only transport as before, but with bounded
+/// connect and total timeouts of its own (the callers keep their whole
+/// [`DOWNLOAD_TIMEOUT`] budget around the refresh, which includes extraction
+/// and the smoke check).
+fn download_client() -> reqwest::Client {
+    reqwest::ClientBuilder::new()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(DOWNLOAD_TIMEOUT)
+        .build()
+        .expect("static download client configuration")
+}
+
 /// Downloads the current Soloist release and installs it at `managed`,
 /// atomically: the archive streams to a sibling temporary file, the binary is
 /// extracted to a sibling, smoke-checked, and only then renamed into place.
@@ -819,7 +869,7 @@ async fn refresh_managed(managed: &Path) -> Result<()> {
         .context("Spotify publishes no Soloist build for this platform")?;
     let url = format!("{DOWNLOAD_BASE}/{archive_name}");
     log::info!("soloist: downloading the daemon from {url}");
-    let response = reqwest::Client::new()
+    let response = download_client()
         .get(url)
         .send()
         .await
@@ -836,9 +886,18 @@ async fn refresh_managed(managed: &Path) -> Result<()> {
     {
         let mut archive_file =
             std::fs::File::create(&archive_path).context("could not write the Soloist download")?;
+        let mut received = 0u64;
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            archive_file.write_all(&chunk.context("the Soloist download failed mid-transfer")?)?;
+            let chunk = &chunk.context("the Soloist download failed mid-transfer")?;
+            received += chunk.len() as u64;
+            if received > MAX_ARCHIVE_BYTES {
+                let _ = std::fs::remove_file(&archive_path);
+                return Err(anyhow!(
+                    "the Soloist download exceeded the {MAX_ARCHIVE_BYTES}-byte limit"
+                ));
+            }
+            archive_file.write_all(chunk)?;
         }
     }
 
