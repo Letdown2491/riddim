@@ -27,7 +27,7 @@ homepage = "https://github.com/Letdown2491/riddim"
 
 [release]
 # Placeholder. The workflow sets ORCHARD_PUBLISH_VERSION from the tag.
-version = "0.1.0"
+version = "0.1.1"
 channel = "stable"
 arch = "linux-x86_64"
 # The listing declares coverage for both arches and is identical from
