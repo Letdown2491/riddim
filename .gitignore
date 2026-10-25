@@ -15,3 +15,7 @@
 # flatpak-builder's work area
 self/tree/
 vendor/
+
+# local flatpak-builder scratch and the local ostree repo
+/.flatpak-builder/
+/repo/

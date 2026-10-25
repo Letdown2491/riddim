@@ -62,8 +62,10 @@ things a bare-metal run exercises differently.
   fallback), `--device=dri` for Vulkan rendering.
 - `--share=network`: the Spotify Web API, the OAuth callback server on
   `127.0.0.1:8888`, and the Soloist daemon download.
-- `--device=alsa`: Soloist plays through ALSA, which PipeWire and
-  PulseAudio servers provide.
+- `--socket=pulseaudio`: Soloist speaks the ALSA API; the freedesktop
+  runtime routes ALSA's default device through its pulse plugin
+  (`99-pulseaudio-default.conf`), and PipeWire serves that pulse-compatible
+  socket on the host. No direct ALSA hardware access is granted.
 - `--talk-name=org.freedesktop.secrets`: the desktop keyring holds the
   OAuth token and the Soloist API key; nothing is written to plain files.
 - `--own-name=org.mpris.MediaPlayer2.riddim`: MPRIS for media keys and

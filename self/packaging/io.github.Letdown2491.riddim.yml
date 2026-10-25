@@ -18,8 +18,10 @@ finish-args:
   # spotify web api, the oauth callback server on 127.0.0.1:8888, and the
   # soloist daemon riddim downloads and keeps updated
   - --share=network
-  # soloist plays through alsa, which pipewire and pulseaudio servers provide
-  - --device=alsa
+  # soloist speaks the alsa api; inside the sandbox alsa's default device
+  # routes through the runtime's pulse plugin (99-pulseaudio-default.conf),
+  # and the host's pipewire serves that pulse-compatible socket
+  - --socket=pulseaudio
   # the desktop keyring (secret service) holds the oauth token and the
   # soloist api key
   - --talk-name=org.freedesktop.secrets
